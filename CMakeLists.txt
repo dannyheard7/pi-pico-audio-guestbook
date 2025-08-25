@@ -43,8 +43,10 @@ add_subdirectory(lib/FatFs_SPI build)
 # Add executable. Default name is the project name, version 0.1
 
 file(GLOB SRC_FILES
-    "${CMAKE_CURRENT_LIST_DIR}/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/*.c",
+    "${CMAKE_CURRENT_LIST_DIR}/*.cpp"
 )
+
 
 add_executable(
     test

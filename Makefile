@@ -181,6 +181,54 @@ cyw43_driver_picow_cyw43_bus_pio_spi_pio_h/fast:
 	$(MAKE) $(MAKESILENT) -f pico-sdk/src/rp2_common/pico_cyw43_driver/CMakeFiles/cyw43_driver_picow_cyw43_bus_pio_spi_pio_h.dir/build.make pico-sdk/src/rp2_common/pico_cyw43_driver/CMakeFiles/cyw43_driver_picow_cyw43_bus_pio_spi_pio_h.dir/build
 .PHONY : cyw43_driver_picow_cyw43_bus_pio_spi_pio_h/fast
 
+error_handling.o: error_handling.cpp.o
+.PHONY : error_handling.o
+
+# target to build an object file
+error_handling.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/error_handling.cpp.o
+.PHONY : error_handling.cpp.o
+
+error_handling.i: error_handling.cpp.i
+.PHONY : error_handling.i
+
+# target to preprocess a source file
+error_handling.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/error_handling.cpp.i
+.PHONY : error_handling.cpp.i
+
+error_handling.s: error_handling.cpp.s
+.PHONY : error_handling.s
+
+# target to generate assembly for a file
+error_handling.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/error_handling.cpp.s
+.PHONY : error_handling.cpp.s
+
+file_handlers.o: file_handlers.cpp.o
+.PHONY : file_handlers.o
+
+# target to build an object file
+file_handlers.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/file_handlers.cpp.o
+.PHONY : file_handlers.cpp.o
+
+file_handlers.i: file_handlers.cpp.i
+.PHONY : file_handlers.i
+
+# target to preprocess a source file
+file_handlers.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/file_handlers.cpp.i
+.PHONY : file_handlers.cpp.i
+
+file_handlers.s: file_handlers.cpp.s
+.PHONY : file_handlers.s
+
+# target to generate assembly for a file
+file_handlers.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/file_handlers.cpp.s
+.PHONY : file_handlers.cpp.s
+
 home/danny/.pico-sdk/sdk/2.1.1/src/common/hardware_claim/claim.o: home/danny/.pico-sdk/sdk/2.1.1/src/common/hardware_claim/claim.c.o
 .PHONY : home/danny/.pico-sdk/sdk/2.1.1/src/common/hardware_claim/claim.o
 
@@ -1757,29 +1805,29 @@ lib/FatFs_SPI/src/rtc.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/lib/FatFs_SPI/src/rtc.c.s
 .PHONY : lib/FatFs_SPI/src/rtc.c.s
 
-test.o: test.c.o
+test.o: test.cpp.o
 .PHONY : test.o
 
 # target to build an object file
-test.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.c.o
-.PHONY : test.c.o
+test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.cpp.o
+.PHONY : test.cpp.o
 
-test.i: test.c.i
+test.i: test.cpp.i
 .PHONY : test.i
 
 # target to preprocess a source file
-test.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.c.i
-.PHONY : test.c.i
+test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.cpp.i
+.PHONY : test.cpp.i
 
-test.s: test.c.s
+test.s: test.cpp.s
 .PHONY : test.s
 
 # target to generate assembly for a file
-test.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.c.s
-.PHONY : test.c.s
+test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/test.cpp.s
+.PHONY : test.cpp.s
 
 # Help Target
 help:
@@ -1794,6 +1842,12 @@ help:
 	@echo "... bs2_default"
 	@echo "... bs2_default_library"
 	@echo "... test"
+	@echo "... error_handling.o"
+	@echo "... error_handling.i"
+	@echo "... error_handling.s"
+	@echo "... file_handlers.o"
+	@echo "... file_handlers.i"
+	@echo "... file_handlers.s"
 	@echo "... home/danny/.pico-sdk/sdk/2.1.1/src/common/hardware_claim/claim.o"
 	@echo "... home/danny/.pico-sdk/sdk/2.1.1/src/common/hardware_claim/claim.i"
 	@echo "... home/danny/.pico-sdk/sdk/2.1.1/src/common/hardware_claim/claim.s"

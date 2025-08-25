@@ -3,3 +3,11 @@ build
 generated/
 CMakeFiles/
 CMakeCache.txt
+pico-sdk/
+*.elf
+*.elf.map
+*.hex
+*.uf2
+*.ld
+*.bin
+compile_commands.json

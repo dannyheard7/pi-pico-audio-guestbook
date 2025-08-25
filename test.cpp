@@ -4,6 +4,7 @@
 #include "ff.h"
 #include "hw_config.h"
 #include "error_handling.h"
+#include "file_handlers.h"
 
 int main() {
     FRESULT fr;
@@ -21,20 +22,21 @@ int main() {
         return -1;
     }
 
-    if(!sd_init_driver()) {
-        printf("ERROR: Could not initialize SD driver\r\n");
-        flashErrorLED();
-        return -1;
-    }
+    // if(!sd_init_driver()) {
+    //     printf("ERROR: Could not initialize SD driver\r\n");
+    //     flashErrorLED();
+    //     return -1;
+    // }
 
     sd_card_t *pSD = sd_get_by_num(0);
-
     fr = f_mount(&pSD->fatfs, pSD->pcName, 1);
     if (fr != FR_OK) {
         printf("ERROR: Could not mount filesystem (%d)\r\n", fr);
         flashErrorLED();
         return -1;
     }
+
+    list_files_in_folder(pSD, "prompts");
 
     // Open file for writing ()
     fr = f_open(&fil, filename, FA_WRITE | FA_CREATE_ALWAYS);
