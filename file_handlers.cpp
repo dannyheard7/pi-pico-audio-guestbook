@@ -1,15 +1,16 @@
 #include <stdio.h>
-#include "sd_card.h"
-#include "error_handling.h"
-#include "file_handlers.h"
 #include <cstring>
 #include <string>
 #include <vector>
+#include <memory>
+#include "sd_card.h"
+#include "file.h"
+#include "file_handlers.h"
+
 
 using std::string;
 using std::vector;
-
-const string SEPARATOR = "/";
+using std::unique_ptr;
 
 bool string_starts_with(string str, string prefix)
 {
@@ -31,30 +32,11 @@ bool string_ends_with(string str, string suffix)
     return str.substr(str.size() - suffix.size()) == suffix;
 }
 
-string getFileName(string path)
-{
-    size_t lastSeperatorIndex = path.find_last_of(SEPARATOR);
-    if (lastSeperatorIndex != string::npos)
-    {
-        return path.substr(lastSeperatorIndex + 1);
-    }
 
-    return path;
-}
-
-string getFileExtension(string path)
-{
-    size_t dotIndex = path.find_last_of(".");
-
-    if (dotIndex != string::npos)
-    {
-        return path.substr(dotIndex + 1);
-    }
-
-    return "";
-}
-
-vector<File> list_files_in_folder(sd_card_t *pSD, string folder)
+vector<unique_ptr<File>> list_files_in_folder(
+    sd_card_t *pSD,
+    string folder,
+    unique_ptr<FileType> typeFilter)
 {
     DIR dir;
 
@@ -62,9 +44,9 @@ vector<File> list_files_in_folder(sd_card_t *pSD, string folder)
 
     if (!string_starts_with(folder, pSD->pcName))
     {
-        if (!string_starts_with(folder, SEPARATOR))
+        if (!string_starts_with(folder, DIRECTORY_SEPARATOR))
         {
-            fullPath = pSD->pcName + SEPARATOR + folder;
+            fullPath = pSD->pcName + DIRECTORY_SEPARATOR + folder;
         }
         else
         {
@@ -87,30 +69,27 @@ vector<File> list_files_in_folder(sd_card_t *pSD, string folder)
     else if (res != FR_OK)
     {
         printf("Failed to open directory: %s\n", fullPath);
-        flashErrorLED();
         return {};
     }
 
-    vector<File> files;
+    vector<unique_ptr<File>> files = {};
     FILINFO finfo;
     while (f_readdir(&dir, &finfo) == FR_OK && finfo.fname[0] != 0)
     {
-        printf("Found file: %s\n", finfo.fname);
+        string fullFilePath = fullPath + DIRECTORY_SEPARATOR + finfo.fname;
+        unique_ptr<File> file = File::Create(fullFilePath);
+
+        if(typeFilter == NULL || file.get()->getType() == *typeFilter || (*typeFilter == FileType::Generic)) 
+        {
+            files.push_back(std::move(file));
+        }
     }
 
     if (f_closedir(&dir) != FR_OK)
     {
         printf("Failed to close directory: %s\n", fullPath);
-        flashErrorLED();
         return files;
     }
 
     return files;
-}
-
-File::File(string path)
-{
-    this->path = path;
-    this->name = getFileName(path);
-    this->extension = getFileExtension(path);
 }

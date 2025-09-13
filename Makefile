@@ -181,29 +181,29 @@ cyw43_driver_picow_cyw43_bus_pio_spi_pio_h/fast:
 	$(MAKE) $(MAKESILENT) -f pico-sdk/src/rp2_common/pico_cyw43_driver/CMakeFiles/cyw43_driver_picow_cyw43_bus_pio_spi_pio_h.dir/build.make pico-sdk/src/rp2_common/pico_cyw43_driver/CMakeFiles/cyw43_driver_picow_cyw43_bus_pio_spi_pio_h.dir/build
 .PHONY : cyw43_driver_picow_cyw43_bus_pio_spi_pio_h/fast
 
-error_handling.o: error_handling.cpp.o
-.PHONY : error_handling.o
+file.o: file.cpp.o
+.PHONY : file.o
 
 # target to build an object file
-error_handling.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/error_handling.cpp.o
-.PHONY : error_handling.cpp.o
+file.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/file.cpp.o
+.PHONY : file.cpp.o
 
-error_handling.i: error_handling.cpp.i
-.PHONY : error_handling.i
+file.i: file.cpp.i
+.PHONY : file.i
 
 # target to preprocess a source file
-error_handling.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/error_handling.cpp.i
-.PHONY : error_handling.cpp.i
+file.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/file.cpp.i
+.PHONY : file.cpp.i
 
-error_handling.s: error_handling.cpp.s
-.PHONY : error_handling.s
+file.s: file.cpp.s
+.PHONY : file.s
 
 # target to generate assembly for a file
-error_handling.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/error_handling.cpp.s
-.PHONY : error_handling.cpp.s
+file.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/file.cpp.s
+.PHONY : file.cpp.s
 
 file_handlers.o: file_handlers.cpp.o
 .PHONY : file_handlers.o
@@ -1842,9 +1842,9 @@ help:
 	@echo "... bs2_default"
 	@echo "... bs2_default_library"
 	@echo "... test"
-	@echo "... error_handling.o"
-	@echo "... error_handling.i"
-	@echo "... error_handling.s"
+	@echo "... file.o"
+	@echo "... file.i"
+	@echo "... file.s"
 	@echo "... file_handlers.o"
 	@echo "... file_handlers.i"
 	@echo "... file_handlers.s"
