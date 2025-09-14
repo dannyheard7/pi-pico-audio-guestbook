@@ -15,11 +15,11 @@ class File
 {
     public:
         virtual FileType getType() const { return FileType::Generic; }
-        File(string path);  
+        File(const string path);  
         string extension;
         string path;
         string name;
-        static unique_ptr<File> Create(string path);
+        static unique_ptr<File> Create(const string path);
 };
 
 struct  WAV_HEADER
@@ -37,14 +37,13 @@ struct  WAV_HEADER
     uint32_t        bytesPerSec;    // bytes per second
     uint16_t        blockAlign;     // 2=16-bit mono, 4=16-bit stereo
     uint16_t        bitsPerSample;  // Number of bits per sample
-    /* "data" sub-chunk */
-    char         Data[4]; // "data"  string
-    uint32_t        DataSize;  // Sampled data length
 };
 
 class WavFile : public File {
     public:
-        WavFile(string path, WAV_HEADER header);
+        WavFile(const string path, const WAV_HEADER header, const uint32_t dataStartPosition, const uint32_t dataSize);
         WAV_HEADER header;
+        uint32_t dataStartPosition;
+        uint32_t dataSize;
         virtual FileType getType() const override { return FileType::Wav; }
 };
