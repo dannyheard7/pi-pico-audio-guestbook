@@ -64,6 +64,7 @@ pico_enable_stdio_usb(test 0)
 target_link_libraries(
     test
     pico_stdlib
+    hardware_pwm
     FatFs_SPI)
 
 # Add the standard include files to the build
