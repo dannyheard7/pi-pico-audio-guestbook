@@ -64,6 +64,8 @@ target_link_libraries(
     test
     pico_stdlib
     hardware_pwm
+    hardware_adc
+    hardware_dma
     pico_multicore
     FatFs_SPI)
 
