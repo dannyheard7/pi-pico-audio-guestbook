@@ -84,10 +84,9 @@ void stop_recording()
     recording_active = false;
 }
 
-void record_wav_adc(const sd_card_t *pSD, const string output_path,
+void record_wav_adc(const string output_path,
                     const uint adc_gpio, uint32_t sample_rate)
 {
-    (void)pSD; // SD card is already mounted by the caller
     printf("ADC recording: GPIO %u, %lu Hz -> %s\n",
            adc_gpio, (unsigned long)sample_rate, output_path.c_str());
 
@@ -163,8 +162,8 @@ void record_wav_adc(const sd_card_t *pSD, const string output_path,
         return;
     }
 
-    const uint16_t NUM_CHANNELS    = 1;
-    const uint16_t BITS_PER_SAMPLE = 16;
+    const uint16_t num_channels     = 1;
+    const uint16_t bits_per_sample  = 16;
 
     WAV_HEADER header;
     memcpy(header.RIFF, "RIFF", 4);
@@ -173,11 +172,11 @@ void record_wav_adc(const sd_card_t *pSD, const string output_path,
     memcpy(header.fmt,  "fmt ", 4);
     header.Subchunk1Size = 16;
     header.AudioFormat   = 1;  // PCM
-    header.NumOfChannels = NUM_CHANNELS;
+    header.NumOfChannels = num_channels;
     header.SamplesPerSec = sample_rate;
-    header.blockAlign    = NUM_CHANNELS * BITS_PER_SAMPLE / 8;
+    header.blockAlign    = num_channels * bits_per_sample / 8;
     header.bytesPerSec   = sample_rate * header.blockAlign;
-    header.bitsPerSample = BITS_PER_SAMPLE;
+    header.bitsPerSample = bits_per_sample;
 
     UINT bw;
     f_write(&file, &header, sizeof(WAV_HEADER), &bw);

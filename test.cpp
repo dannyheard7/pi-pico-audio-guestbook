@@ -57,7 +57,7 @@ int main()
                                        NULL,
                                        true);
 
-    record_wav_adc(pSD, RECORDING_PATH, MIC_ADC_GPIO, RECORD_SAMPLE_RATE);
+    record_wav_adc(RECORDING_PATH, MIC_ADC_GPIO, RECORD_SAMPLE_RATE);
 
     // Cancel the alarm in case recording was stopped early by another means.
     if (alarm > 0)
