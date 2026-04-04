@@ -17,11 +17,20 @@ static const uint32_t ADC_CLOCK_HZ              = 48000000;
 static const uint32_t ADC_CYCLES_PER_CONVERSION = 96;
 
 // Two equally-sized capture buffers that DMA alternates between.
-// At 16 kHz mono the Pico fills one buffer every ~128 ms, giving the CPU
-// ample time to write the other buffer to the SD card.
+// Each buffer holds RECORD_BUFFER_SAMPLES *output* samples worth of raw ADC
+// data (RECORD_BUFFER_SAMPLES × OVERSAMPLE raw 16-bit words).
+// At 16 kHz mono with 4× oversampling the Pico fills one buffer every
+// ~128 ms, giving the CPU ample time to write the other buffer to the SD card.
 static const uint32_t RECORD_BUFFER_SAMPLES = 2048;
-static uint16_t rec_buffer_a[RECORD_BUFFER_SAMPLES];
-static uint16_t rec_buffer_b[RECORD_BUFFER_SAMPLES];
+
+// Oversampling factor: the ADC captures OVERSAMPLE raw readings per output
+// sample.  Averaging them reduces the noise floor by ~3 dB per doubling, so
+// 4× oversampling yields roughly +6 dB SNR improvement over the raw ADC.
+// The RP2040 ADC has ~8.7 ENOB; with 4× oversampling this approaches ~10 ENOB.
+static const uint32_t OVERSAMPLE = 4;
+static const uint32_t RAW_BUFFER_SAMPLES = RECORD_BUFFER_SAMPLES * OVERSAMPLE;
+static uint16_t rec_buffer_a[RAW_BUFFER_SAMPLES];
+static uint16_t rec_buffer_b[RAW_BUFFER_SAMPLES];
 
 // Scratch buffer used to convert 12-bit unsigned ADC values to 16-bit signed
 // PCM before writing to the file (avoids a large stack allocation).
@@ -50,32 +59,39 @@ static void __isr adc_dma_irq_handler()
         // Reset write address and transfer count so channel A is ready for
         // its next activation by channel B's chain_to.
         dma_channel_set_write_addr(rec_dma_chan_a, rec_buffer_a, false);
-        dma_channel_set_trans_count(rec_dma_chan_a, RECORD_BUFFER_SAMPLES, false);
+        dma_channel_set_trans_count(rec_dma_chan_a, RAW_BUFFER_SAMPLES, false);
     }
     if (rec_dma_chan_b >= 0 && (dma_hw->ints0 & (1u << rec_dma_chan_b)))
     {
         dma_hw->ints0 = (1u << rec_dma_chan_b);
         rec_buf_b_ready = true;
         dma_channel_set_write_addr(rec_dma_chan_b, rec_buffer_b, false);
-        dma_channel_set_trans_count(rec_dma_chan_b, RECORD_BUFFER_SAMPLES, false);
+        dma_channel_set_trans_count(rec_dma_chan_b, RAW_BUFFER_SAMPLES, false);
     }
 }
 
-// Convert a buffer of 12-bit unsigned ADC samples to 16-bit signed PCM and
-// append them to the open WAV file.  Updates *data_size with bytes written.
-static void write_adc_samples(FIL *file, const uint16_t *samples,
-                               uint32_t count, uint32_t *data_size)
+// Convert a buffer of oversampled 12-bit ADC readings to 16-bit signed PCM
+// and append them to the open WAV file.  Every OVERSAMPLE consecutive raw
+// readings are averaged into a single output sample, improving SNR.
+// Updates *data_size with the number of bytes written.
+static void write_adc_samples(FIL *file, const uint16_t *raw,
+                               uint32_t raw_count, uint32_t *data_size)
 {
-    for (uint32_t i = 0; i < count; i++)
+    uint32_t out_count = raw_count / OVERSAMPLE;
+    for (uint32_t i = 0; i < out_count; i++)
     {
-        // ADC result is 12-bit right-aligned (bits 11:0), value 0-4095.
-        // Centre at 2048, then scale to signed 16-bit PCM:
-        //   range: (0-2048)*16 = -32768  to  (4095-2048)*16 = 32752
-        // Both extremes fit within int16_t (-32768 to 32767).
-        rec_convert_buf[i] = (int16_t)(((int32_t)(samples[i] & 0x0FFF) - 2048) * 16);
+        // Sum OVERSAMPLE consecutive 12-bit ADC readings
+        int32_t sum = 0;
+        for (uint32_t j = 0; j < OVERSAMPLE; j++)
+            sum += (int32_t)(raw[i * OVERSAMPLE + j] & 0x0FFF);
+
+        // Average, centre at 2048, scale to signed 16-bit PCM.
+        // averaged range: (0-2048)*16 = -32768  to  (4095-2048)*16 = 32752
+        int32_t avg = sum / (int32_t)OVERSAMPLE;
+        rec_convert_buf[i] = (int16_t)((avg - 2048) * 16);
     }
     UINT bw;
-    f_write(file, rec_convert_buf, count * sizeof(int16_t), &bw);
+    f_write(file, rec_convert_buf, out_count * sizeof(int16_t), &bw);
     *data_size += bw;
 }
 
@@ -102,9 +118,12 @@ void record_wav_adc(const string output_path,
     // (keep full 12-bit result right-aligned in a 16-bit word).
     adc_fifo_setup(true, true, 1, false, false);
 
-    // Clock divider: clkdiv = (ADC_CLOCK_HZ / (sample_rate * ADC_CYCLES_PER_CONVERSION)) - 1
+    // Clock divider: run the ADC at sample_rate * OVERSAMPLE so that we
+    // capture OVERSAMPLE raw readings per output sample.
+    // clkdiv = (ADC_CLOCK_HZ / (sample_rate * OVERSAMPLE * ADC_CYCLES_PER_CONVERSION)) - 1
     float clkdiv = (float)ADC_CLOCK_HZ /
-                   ((float)sample_rate * (float)ADC_CYCLES_PER_CONVERSION) - 1.0f;
+                   ((float)sample_rate * (float)OVERSAMPLE *
+                    (float)ADC_CYCLES_PER_CONVERSION) - 1.0f;
     if (clkdiv < 0.0f) clkdiv = 0.0f;
     adc_set_clkdiv(clkdiv);
 
@@ -139,10 +158,10 @@ void record_wav_adc(const string output_path,
     // Pre-configure both channels (do not start yet)
     dma_channel_configure(rec_dma_chan_a, &cfg_a,
                           rec_buffer_a, &adc_hw->fifo,
-                          RECORD_BUFFER_SAMPLES, false);
+                          RAW_BUFFER_SAMPLES, false);
     dma_channel_configure(rec_dma_chan_b, &cfg_b,
                           rec_buffer_b, &adc_hw->fifo,
-                          RECORD_BUFFER_SAMPLES, false);
+                          RAW_BUFFER_SAMPLES, false);
 
     // ------------------------------------------------------------------
     // Create output WAV file and write placeholder header
@@ -202,12 +221,12 @@ void record_wav_adc(const string output_path,
         if (rec_buf_a_ready)
         {
             rec_buf_a_ready = false;
-            write_adc_samples(&file, rec_buffer_a, RECORD_BUFFER_SAMPLES, &data_size);
+            write_adc_samples(&file, rec_buffer_a, RAW_BUFFER_SAMPLES, &data_size);
         }
         if (rec_buf_b_ready)
         {
             rec_buf_b_ready = false;
-            write_adc_samples(&file, rec_buffer_b, RECORD_BUFFER_SAMPLES, &data_size);
+            write_adc_samples(&file, rec_buffer_b, RAW_BUFFER_SAMPLES, &data_size);
         }
         tight_loop_contents();
     }

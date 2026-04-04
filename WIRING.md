@@ -1,82 +1,118 @@
-# Wiring Guide – Analogue Microphone Input
+# Wiring Guide
 
-This document describes how to connect a two-wire analogue (electret) microphone to
-the Raspberry Pi Pico so that `record_wav_adc()` can capture audio.
-
----
-
-## Pin assignment
-
-The recording function uses **GPIO 26 (ADC0, physical pin 31)** by default.
-This pin does **not** clash with any other peripheral already in use:
-
-| GPIO | Function      | Peripheral |
-|------|---------------|------------|
-| 8    | SPI1 MISO     | SD card    |
-| 9    | SPI1 CS       | SD card    |
-| 10   | SPI1 SCK      | SD card    |
-| 11   | SPI1 MOSI     | SD card    |
-| 18   | PWM audio out | Speaker    |
-| **26** | **ADC0 – microphone in** | **Microphone** |
+This document covers all hardware connections required by the audio guestbook:
+the SD card reader, the speaker/amplifier output, and the analogue microphone input.
 
 ---
 
-## Option A – Microphone amplifier breakout board (recommended)
+## Pin summary
 
-Pre-built amplifier modules such as the **MAX4466**, **MAX9814**, or **KY-037/KY-038**
-already include the bias resistor, decoupling capacitor, and gain stage.  They present
-a 0 V – 3.3 V centred output that feeds directly into the Pico ADC.
+| GPIO | Physical pin | Function             | Connected to          |
+|------|-------------|----------------------|-----------------------|
+| 8    | 11          | SPI1 MISO            | SD card DAT0          |
+| 9    | 12          | SPI1 CS (SS)         | SD card CS            |
+| 10   | 14          | SPI1 SCK             | SD card CLK           |
+| 11   | 15          | SPI1 MOSI            | SD card CMD/DI        |
+| 18   | 24          | PWM audio out        | Speaker / amplifier   |
+| 26   | 31          | ADC0 – microphone in | Microphone            |
+
+---
+
+## 1 – SD card reader (SPI1)
+
+A standard SPI-interface micro-SD breakout board is required.  Power the module
+from the Pico's **3V3** rail (pin 36); do **not** use VSYS/5V — most breakout boards
+have an on-board 3.3 V regulator that will conflict.
 
 ```
-Pico 3V3 (pin 36) ──────── VCC
-Pico GND  (pin 38) ──────── GND
-Module AOUT        ──────── GPIO 26 / ADC0 (pin 31)
+Pico 3V3  (pin 36) ──── VCC   (SD module)
+Pico GND  (pin 38) ──── GND   (SD module)
+GPIO  8   (pin 11) ──── MISO  (SD module DAT0)
+GPIO  9   (pin 12) ──── CS    (SD module CS)
+GPIO 10   (pin 14) ──── SCK   (SD module CLK)
+GPIO 11   (pin 15) ──── MOSI  (SD module CMD/DI)
+```
+
+> Many cheap SD breakout boards include 10 kΩ pull-ups on MISO/MOSI/SCK.
+> These are compatible with the Pico and no additional pull-ups are needed.
+
+---
+
+## 2 – Speaker / audio output (GPIO 18, PWM)
+
+The Pico outputs a 12-bit PWM signal (~30.5 kHz carrier) on **GPIO 18**.  An RC
+low-pass filter removes the carrier and leaves only the audio component.
+
+```
+GPIO 18 (pin 24) ──┤ 1 kΩ ├──┬──────────── AUDIO IN (+)  (amplifier or speaker)
+                              │
+                             ═╧═  47–100 nF  (ceramic capacitor)
+                             ═╤═
+                              │
+GND     (pin 38) ─────────────┴──────────── AUDIO IN (−) / GND
+```
+
+For best results feed the filtered output into a small class-D amplifier module
+(e.g. MAX98357, PAM8302) before connecting a speaker.  A raw 8 Ω speaker can be
+connected directly for monitoring but will be very quiet.
+
+---
+
+## 3 – Analogue microphone input (GPIO 26, ADC0)
+
+`record_wav_adc()` reads from **GPIO 26 (ADC0, pin 31)** by default.
+
+### Option A – Microphone amplifier breakout board (recommended)
+
+Pre-built amplifier modules such as the **MAX4466**, **MAX9814**, or **KY-037/KY-038**
+include the bias resistor, decoupling capacitor, and gain stage.  They present a
+0 V – 3.3 V centred output that feeds directly into the Pico ADC.
+
+```
+Pico 3V3  (pin 36) ──── VCC
+Pico GND  (pin 38) ──── GND
+Module AOUT         ──── GPIO 26 / ADC0  (pin 31)
 ```
 
 No extra components are required.
 
----
-
-## Option B – Bare electret microphone capsule (2-pin)
+### Option B – Bare electret microphone capsule (2-pin)
 
 A raw electret capsule needs a pull-up resistor (bias) and an AC-coupling
 capacitor to correctly drive the ADC input.
 
-### Components required
+| Component | Value    | Purpose                                   |
+|-----------|----------|-------------------------------------------|
+| R1        | 10 kΩ    | Drain pull-up / bias current limiter      |
+| R2        | 10 kΩ    | Voltage-divider top half (sets mid-point) |
+| R3        | 10 kΩ    | Voltage-divider bottom half               |
+| C1        | 100 nF   | AC coupling (blocks DC bias from ADC pin) |
 
-| Component | Value | Purpose |
-|-----------|-------|---------|
-| R1        | 10 kΩ | Drain pull-up / current limiter |
-| C1        | 100 nF ceramic | AC coupling (blocks DC bias) |
-| R2        | 10 kΩ | Voltage-divider top half |
-| R3        | 10 kΩ | Voltage-divider bottom half |
-
-> The R2/R3 voltage divider sets the ADC mid-point to ~1.65 V (half of 3.3 V)
-> so the microphone signal is centred inside the ADC input range.
-
-### Schematic
+> R2/R3 create a 1.65 V mid-point so the microphone signal is centred in the
+> ADC input range (0–3.3 V).
 
 ```
-3V3 (pin 36) ──┬── R1 (10 kΩ) ──┬── MIC+ (capsule drain)
-               │                 │
-               R2 (10 kΩ)        │  (electret capsule)
-               │                 │
-               ├── (mid-point)   MIC– (capsule source) ── GND (pin 38)
-               │        │
-               R3        C1 (100 nF)
-               │        │
-              GND       GPIO 26 / ADC0 (pin 31)
+3V3 (pin 36) ──┬── R1 (10 kΩ) ──── MIC+  (capsule drain / signal pin)
+               │
+               R2 (10 kΩ)
+               │
+               ├── (mid-point node) ──── C1 (100 nF) ──── GPIO 26 (pin 31)
+               │
+               R3 (10 kΩ)
+               │
+              GND                        MIC−  (capsule source) ──── GND (pin 38)
 ```
 
 Step-by-step:
 
-1. Connect **3V3** (pin 36) through **R1** (10 kΩ) to the **+** pin of the microphone capsule.
-2. Connect the **–** pin of the capsule to **GND** (pin 38).
-3. Create a 1.65 V bias by wiring **R2** (10 kΩ) from 3V3 to a mid-point node, and **R3** (10 kΩ) from that same node to GND.
-4. Connect the mid-point node through **C1** (100 nF) to **GPIO 26** (pin 31).  The capacitor passes only the AC audio component to the ADC input while blocking the DC bias voltage.
+1. Connect **3V3** through **R1** to the **+** (signal) pin of the capsule.
+2. Connect the capsule **−** pin to **GND**.
+3. Wire **R2** from 3V3 to a mid-point node, and **R3** from that node to GND.
+4. Connect the mid-point through **C1** (100 nF) to **GPIO 26**.  The capacitor
+   passes only the AC audio component to the ADC while blocking the DC bias.
 
-> **Note:** Electret capsules are polarised.  The pin connected to the internal
-> FET gate (usually labelled + or marked with a longer leg) is the signal output.
+> Electret capsules are polarised.  The pin connected to the internal FET gate
+> (usually the longer leg or the one marked +) is the signal output.
 
 ---
 
@@ -85,13 +121,14 @@ Step-by-step:
 ```cpp
 #include "audio.h"
 
-// Record until stop_recording() is called.
-// GPIO 26 = ADC0; sample rate 16 000 Hz; output saved to SD card.
-record_wav_adc(pSD, "0:/recordings/guestbook.wav", 26, 16000);
+// Record for 5 seconds from GPIO 26 (ADC0) at 16 000 Hz, save to SD card.
+add_alarm_in_ms(5000, [](alarm_id_t, void*) -> int64_t {
+    stop_recording(); return 0;
+}, nullptr, true);
+record_wav_adc("0:/recordings/guestbook.wav", 26, 16000);
 
-// --- Call stop_recording() from a timer, button ISR, or second core ---
-stop_recording();
+// Play back the recording through GPIO 18 (PWM).
+WavFile wav = /* load from SD */;
+play_wav_pwm(wav, 18);
 ```
 
-The output file is a standard 16-bit mono PCM WAV that can be played back
-with `play_wav_pwm()` or any WAV-capable audio player.
