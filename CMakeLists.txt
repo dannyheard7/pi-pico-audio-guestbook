@@ -6,10 +6,9 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Required for the breakpoints to work correctly
-set(CMAKE_BUILD_TYPE Debug)
-set(CMAKE_C_FLAGS_DEBUG "-g -O0")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
+# RelWithDebInfo keeps debug symbols while enabling -O2 optimisation.
+# This is important for audio: -O0 is too slow for the per-sample ISR.
+set(CMAKE_BUILD_TYPE RelWithDebInfo)
 
 # Initialise pico_sdk from installed location
 # (note this can come from environment, CMake cache etc)
@@ -65,6 +64,7 @@ target_link_libraries(
     test
     pico_stdlib
     hardware_pwm
+    pico_multicore
     FatFs_SPI)
 
 # Add the standard include files to the build
