@@ -43,13 +43,14 @@ static void phone_hook_irq(uint gpio, uint32_t events)
 
     if (events & GPIO_IRQ_EDGE_RISE)
     {
-        // Circuit opened → handset lifted (off hook)
-        phone_off_hook = true;
+         // Circuit closed → handset replaced (on hook)
+        phone_off_hook = false;
     }
     if (events & GPIO_IRQ_EDGE_FALL)
     {
-        // Circuit closed → handset replaced (on hook)
-        phone_off_hook = false;
+       
+        // Circuit opened → handset lifted (off hook)
+        phone_off_hook = true;
         stop_recording(); // safe to call from an interrupt handler
     }
 }
@@ -90,7 +91,7 @@ int main()
 
     // Read the current hook state *after* enabling the interrupt so that any
     // edge that occurred during initialisation is not missed.
-    phone_off_hook = gpio_get(PHONE_HOOK_GPIO);
+    phone_off_hook = !gpio_get(PHONE_HOOK_GPIO);
 
     // ------------------------------------------------------------------
     // SD card
