@@ -52,18 +52,18 @@ static volatile bool recording_active = false;
 // ping-pong chain.
 static void __isr adc_dma_irq_handler()
 {
-    if (rec_dma_chan_a >= 0 && (dma_hw->ints0 & (1u << rec_dma_chan_a)))
+    if (rec_dma_chan_a >= 0 && (dma_hw->ints1 & (1u << rec_dma_chan_a)))
     {
-        dma_hw->ints0 = (1u << rec_dma_chan_a); // clear interrupt
+        dma_hw->ints1 = (1u << rec_dma_chan_a); // clear interrupt
         rec_buf_a_ready = true;
         // Reset write address and transfer count so channel A is ready for
         // its next activation by channel B's chain_to.
         dma_channel_set_write_addr(rec_dma_chan_a, rec_buffer_a, false);
         dma_channel_set_trans_count(rec_dma_chan_a, RAW_BUFFER_SAMPLES, false);
     }
-    if (rec_dma_chan_b >= 0 && (dma_hw->ints0 & (1u << rec_dma_chan_b)))
+    if (rec_dma_chan_b >= 0 && (dma_hw->ints1 & (1u << rec_dma_chan_b)))
     {
-        dma_hw->ints0 = (1u << rec_dma_chan_b);
+        dma_hw->ints1 = (1u << rec_dma_chan_b);
         rec_buf_b_ready = true;
         dma_channel_set_write_addr(rec_dma_chan_b, rec_buffer_b, false);
         dma_channel_set_trans_count(rec_dma_chan_b, RAW_BUFFER_SAMPLES, false);
@@ -149,11 +149,12 @@ void record_wav_adc(const string output_path,
     channel_config_set_dreq(&cfg_b, DREQ_ADC);
     channel_config_set_chain_to(&cfg_b, rec_dma_chan_a);
 
-    // Enable DMA IRQ0 for both channels and register the handler
-    dma_channel_set_irq0_enabled(rec_dma_chan_a, true);
-    dma_channel_set_irq0_enabled(rec_dma_chan_b, true);
-    irq_set_exclusive_handler(DMA_IRQ_0, adc_dma_irq_handler);
-    irq_set_enabled(DMA_IRQ_0, true);
+    // Enable DMA IRQ1 for both channels and register the handler
+    // (DMA_IRQ_0 is used exclusively by the SD card SPI driver)
+    dma_channel_set_irq1_enabled(rec_dma_chan_a, true);
+    dma_channel_set_irq1_enabled(rec_dma_chan_b, true);
+    irq_add_shared_handler(DMA_IRQ_1, adc_dma_irq_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
+    irq_set_enabled(DMA_IRQ_1, true);
 
     // Pre-configure both channels (do not start yet)
     dma_channel_configure(rec_dma_chan_a, &cfg_a,
@@ -172,9 +173,10 @@ void record_wav_adc(const string output_path,
     {
         printf("ERROR: Could not create recording file: %s (%d)\n",
                output_path.c_str(), fr);
-        irq_set_enabled(DMA_IRQ_0, false);
-        dma_channel_set_irq0_enabled(rec_dma_chan_a, false);
-        dma_channel_set_irq0_enabled(rec_dma_chan_b, false);
+        irq_set_enabled(DMA_IRQ_1, false);
+        irq_remove_handler(DMA_IRQ_1, adc_dma_irq_handler);
+        dma_channel_set_irq1_enabled(rec_dma_chan_a, false);
+        dma_channel_set_irq1_enabled(rec_dma_chan_b, false);
         dma_channel_unclaim(rec_dma_chan_a);
         dma_channel_unclaim(rec_dma_chan_b);
         rec_dma_chan_a = rec_dma_chan_b = -1;
@@ -239,9 +241,10 @@ void record_wav_adc(const string output_path,
     dma_channel_abort(rec_dma_chan_a);
     dma_channel_abort(rec_dma_chan_b);
 
-    irq_set_enabled(DMA_IRQ_0, false);
-    dma_channel_set_irq0_enabled(rec_dma_chan_a, false);
-    dma_channel_set_irq0_enabled(rec_dma_chan_b, false);
+    irq_set_enabled(DMA_IRQ_1, false);
+    irq_remove_handler(DMA_IRQ_1, adc_dma_irq_handler);
+    dma_channel_set_irq1_enabled(rec_dma_chan_a, false);
+    dma_channel_set_irq1_enabled(rec_dma_chan_b, false);
     dma_channel_unclaim(rec_dma_chan_a);
     dma_channel_unclaim(rec_dma_chan_b);
     rec_dma_chan_a = rec_dma_chan_b = -1;
