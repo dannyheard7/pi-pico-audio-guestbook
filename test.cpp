@@ -43,15 +43,14 @@ static void phone_hook_irq(uint gpio, uint32_t events)
 
     if (events & GPIO_IRQ_EDGE_RISE)
     {
-         // Circuit closed → handset replaced (on hook)
+        // Circuit opens → handset replaced (on hook)
         phone_off_hook = false;
+        stop_recording(); // safe to call from an interrupt handler
     }
     if (events & GPIO_IRQ_EDGE_FALL)
     {
-       
-        // Circuit opened → handset lifted (off hook)
+        // Circuit closes → handset lifted (off hook)
         phone_off_hook = true;
-        stop_recording(); // safe to call from an interrupt handler
     }
 }
 
@@ -144,7 +143,7 @@ int main()
         }
 
         // Record until the handset is replaced.
-        // phone_hook_irq() calls stop_recording() on the falling edge,
+        // phone_hook_irq() calls stop_recording() on the rising edge,
         // which causes record_wav_adc() to finalise the file and return.
         string path = next_recording_path();
         printf("Recording to: %s\n", path.c_str());
