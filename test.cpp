@@ -1,5 +1,7 @@
 #include <stdio.h>
+#include <string>
 #include <vector>
+#include <memory>
 #include "pico/stdlib.h"
 #include "pico/time.h"
 #include "sd_card.h"
@@ -8,88 +10,155 @@
 #include "file_handlers.h"
 #include "audio.h"
 
+using std::string;
+using std::unique_ptr;
 using std::vector;
 
+// GPIO for the phone hook switch.
+// Wire: one terminal → GPIO 22, other terminal → GND.
+// Internal pull-up is enabled: LOW = on hook (circuit closed to GND),
+// HIGH = off hook (circuit open, pulled up to 3.3 V).
+static const uint PHONE_HOOK_GPIO = 22;
 // GPIO connected to the analogue microphone output (ADC0)
-static const uint MIC_ADC_GPIO   = 26;
+static const uint MIC_ADC_GPIO = 26;
+// GPIO for PWM audio output
+static const uint AUDIO_OUT_GPIO = 18;
 // Sample rate used for recording
 static const uint32_t RECORD_SAMPLE_RATE = 16000;
-// Recording duration in milliseconds
-static const uint32_t RECORD_DURATION_MS = 5000;
-// Output path for the recording on the SD card
-static const char *RECORDING_PATH = "0:/recordings/guestbook.wav";
+// Directory on the SD card that stores incoming recordings
+static const char *RECORDINGS_DIR = "0:/recordings";
+// Directory on the SD card that contains the greeting prompt(s)
+static const char *PROMPTS_DIR = "0:/prompts";
 
-// One-shot alarm callback – stops the recording after the configured duration.
-static int64_t stop_recording_alarm_cb(alarm_id_t id, void *user_data)
+// True while the handset is off the hook (phone in use).
+static volatile bool phone_off_hook = false;
+
+// Interrupt handler for the phone hook GPIO.
+// Fires on both edges so we can track the current hook state at all times,
+// including stopping an in-progress recording the moment the phone is replaced.
+static void phone_hook_irq(uint gpio, uint32_t events)
 {
-    (void)id;
-    (void)user_data;
-    stop_recording();
-    return 0; // do not reschedule
+    if (gpio != PHONE_HOOK_GPIO)
+        return;
+
+    if (events & GPIO_IRQ_EDGE_RISE)
+    {
+        // Circuit opened → handset lifted (off hook)
+        phone_off_hook = true;
+    }
+    if (events & GPIO_IRQ_EDGE_FALL)
+    {
+        // Circuit closed → handset replaced (on hook)
+        phone_off_hook = false;
+        stop_recording(); // safe to call from an interrupt handler
+    }
+}
+
+// Return the path to use for the next recording file.
+// Scans for the first unused sequential name (recording_1.wav, recording_2.wav, …)
+// so that existing recordings are never overwritten even if earlier files are deleted.
+static string next_recording_path()
+{
+    size_t n = 1;
+    string path;
+    FILINFO finfo;
+    do
+    {
+        path = string(RECORDINGS_DIR) + "/recording_" + std::to_string(n) + ".wav";
+        n++;
+    } while (f_stat(path.c_str(), &finfo) == FR_OK);
+    return path;
 }
 
 int main()
 {
-    // Initialize chosen serial port
-    if (!stdio_init_all())
-    {
-        printf("ERROR: Could not initialize serial port\r\n");
-        return -1;
-    }
+    stdio_init_all();
+    printf("Pi Pico Audio Guestbook starting\n");
 
+    // ------------------------------------------------------------------
+    // Phone hook GPIO – internal pull-up, active-low.
+    // ------------------------------------------------------------------
+    gpio_init(PHONE_HOOK_GPIO);
+    gpio_set_dir(PHONE_HOOK_GPIO, GPIO_IN);
+    gpio_pull_up(PHONE_HOOK_GPIO);
+
+    gpio_set_irq_enabled_with_callback(
+        PHONE_HOOK_GPIO,
+        GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL,
+        true,
+        &phone_hook_irq);
+
+    // Read the current hook state *after* enabling the interrupt so that any
+    // edge that occurred during initialisation is not missed.
+    phone_off_hook = gpio_get(PHONE_HOOK_GPIO);
+
+    // ------------------------------------------------------------------
+    // SD card
+    // ------------------------------------------------------------------
     sd_card_t *pSD = sd_get_by_num(0);
     FRESULT fr = f_mount(&pSD->fatfs, pSD->pcName, 1);
     if (fr != FR_OK)
     {
-        printf("ERROR: Could not mount filesystem (%d)\r\n", fr);
+        printf("ERROR: Could not mount filesystem (%d)\n", fr);
         return -1;
     }
 
-    // ------------------------------------------------------------------
-    // Record from the analogue microphone for RECORD_DURATION_MS ms.
-    // ------------------------------------------------------------------
     // Create the recordings directory if it does not exist yet.
-    f_mkdir("0:/recordings");
+    f_mkdir(RECORDINGS_DIR);
 
-    // Schedule a one-shot alarm to stop recording after the desired duration.
-    alarm_id_t alarm = add_alarm_in_ms(RECORD_DURATION_MS,
-                                       stop_recording_alarm_cb,
-                                       NULL,
-                                       true);
-
-    record_wav_adc(RECORDING_PATH, MIC_ADC_GPIO, RECORD_SAMPLE_RATE);
-
-    // Cancel the alarm in case recording was stopped early by another means.
-    if (alarm > 0)
-        cancel_alarm(alarm);
+    printf("Guestbook ready – waiting for phone pick-up\n");
 
     // ------------------------------------------------------------------
-    // Play back the recording that was just made.
+    // Main guestbook loop – runs continuously until power is removed.
     // ------------------------------------------------------------------
-    unique_ptr<File> rec_file = File::Create(RECORDING_PATH);
-    if (rec_file && rec_file->getType() == FileType::Wav)
+    while (true)
     {
-        WavFile *wav = static_cast<WavFile *>(rec_file.get());
-        play_wav_pwm(*wav, 18);
-    }
-    else
-    {
-        printf("Could not open recording for playback: %s\n", RECORDING_PATH);
+        // Wait until the handset is lifted.
+        while (!phone_off_hook)
+        {
+            sleep_ms(10);
+        }
+
+        printf("Phone off hook – playing greeting\n");
+
+        // Play the first available greeting prompt from the SD card.
+        vector<unique_ptr<File>> prompts = list_files_in_folder(
+            pSD, PROMPTS_DIR, std::make_unique<FileType>(FileType::Wav));
+        if (!prompts.empty())
+        {
+            WavFile *wav = static_cast<WavFile *>(prompts[0].get());
+            play_wav_pwm(*wav, AUDIO_OUT_GPIO);
+        }
+        else
+        {
+            printf("No prompt found in '%s' – skipping to record\n", PROMPTS_DIR);
+        }
+
+        // Only start recording if the handset is still off the hook after
+        // the prompt has finished playing.
+        if (!phone_off_hook)
+        {
+            printf("Phone replaced before recording started\n");
+            continue;
+        }
+
+        // Record until the handset is replaced.
+        // phone_hook_irq() calls stop_recording() on the falling edge,
+        // which causes record_wav_adc() to finalise the file and return.
+        string path = next_recording_path();
+        printf("Recording to: %s\n", path.c_str());
+        record_wav_adc(path, MIC_ADC_GPIO, RECORD_SAMPLE_RATE);
+        printf("Recording saved: %s\n", path.c_str());
+
+        // Wait for the handset to be fully replaced before listening for
+        // the next pick-up event.
+        while (phone_off_hook)
+        {
+            sleep_ms(10);
+        }
     }
 
-    // ------------------------------------------------------------------
-    // Play any existing prompts from the SD card.
-    // ------------------------------------------------------------------
-    vector<unique_ptr<File>> wav_files = list_files_in_folder(
-        pSD, "prompts", std::make_unique<FileType>(FileType::Wav));
-
-    if (wav_files.size() > 0)
-    {
-        WavFile *wav_file = static_cast<WavFile *>(wav_files[0].get());
-        play_wav_pwm(*wav_file, 18);
-    }
-
-    // Unmount drive
+    // Unreachable, but included for completeness.
     f_unmount(pSD->pcName);
     return 0;
 }

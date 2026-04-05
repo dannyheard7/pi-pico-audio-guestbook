@@ -14,6 +14,7 @@ the SD card reader, the speaker/amplifier output, and the analogue microphone in
 | 10   | 14          | SPI1 SCK             | SD card CLK           |
 | 11   | 15          | SPI1 MOSI            | SD card CMD/DI        |
 | 18   | 24          | PWM audio out        | Speaker / amplifier   |
+| 22   | 29          | Phone hook switch    | Hook switch           |
 | 26   | 31          | ADC0 – microphone in | Microphone            |
 
 ---
@@ -113,6 +114,30 @@ Step-by-step:
 
 > Electret capsules are polarised.  The pin connected to the internal FET gate
 > (usually the longer leg or the one marked +) is the signal output.
+
+---
+
+## 4 – Phone hook switch (GPIO 22)
+
+The telephone handset rests on a spring-loaded hook switch.  The switch is
+**closed** when the handset is in the cradle (on hook) and **open** when the
+handset is lifted (off hook).
+
+Wire one terminal of the switch to **GPIO 22 (physical pin 29)** and the other
+terminal to **GND**.  The firmware enables the internal pull-up resistor, so:
+
+- **On hook** (circuit closed) → GPIO reads **LOW**
+- **Off hook** (circuit open) → GPIO reads **HIGH** (pulled to 3.3 V)
+
+```
+GPIO 22 (pin 29) ──── HOOK SWITCH ──── GND (pin 38)
+```
+
+No additional components are required.  The firmware registers an interrupt on
+both edges:
+
+- **Rising edge** (LOW → HIGH): handset lifted – start greeting playback then recording.
+- **Falling edge** (HIGH → LOW): handset replaced – stop the active recording.
 
 ---
 
