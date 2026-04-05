@@ -8,12 +8,13 @@
 #include "file.h"
 #include <cstring> // for memmove
 
-// Double buffer system for smooth audio playback
-static uint16_t audio_buffer_a[4096];
-static uint16_t audio_buffer_b[4096];
-static volatile bool buffer_a_ready = false;
-static volatile bool buffer_b_ready = false;
-static volatile bool playback_active = false;
+// Double-buffer for SD reads (core 1) and PWM playback (core 0)
+static const uint32_t BUFFER_SIZE = 8192;
+static uint8_t audio_buffer_a[BUFFER_SIZE];
+static uint8_t audio_buffer_b[BUFFER_SIZE];
+static volatile uint32_t buffer_a_bytes = 0;
+static volatile uint32_t buffer_b_bytes = 0;
+static FIL *g_playback_fil = nullptr;
 
 void setup_pwm(const uint gpio, const uint bitsPerSample, uint32_t sampleRate)
 {
@@ -30,12 +31,44 @@ void setup_pwm(const uint gpio, const uint bitsPerSample, uint32_t sampleRate)
     pwm_set_enabled(slice_num, true);
 }
 
+// Core 1 entry: handles all SD reads during playback so core 0 is never
+// stalled for the duration of an f_read call.
+//
+// Protocol (inter-core FIFO):
+//   core 0 → core 1: 1 = fill audio_buffer_a
+//                    2 = fill audio_buffer_b
+//                    0 = stop (core 1 acks with 0 then returns)
+//   core 1 → core 0: echoes the cmd number when the buffer is ready
+static void core1_sd_reader()
+{
+    while (true)
+    {
+        uint32_t cmd = multicore_fifo_pop_blocking();
+        if (cmd == 0)
+        {
+            multicore_fifo_push_blocking(0); // ack
+            return;
+        }
+        UINT br;
+        if (cmd == 1)
+        {
+            f_read(g_playback_fil, audio_buffer_a, BUFFER_SIZE, &br);
+            buffer_a_bytes = br;
+        }
+        else
+        {
+            f_read(g_playback_fil, audio_buffer_b, BUFFER_SIZE, &br);
+            buffer_b_bytes = br;
+        }
+        multicore_fifo_push_blocking(cmd); // signal core 0: buffer is ready
+    }
+}
+
 void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
 {
     setup_pwm(pwm_gpio, wav.header.bitsPerSample, wav.header.SamplesPerSec);
 
-    // Debug: print WAV file info
-    printf("Playing WAV: %d Hz, %d-bit, %d channels\n", 
+    printf("Playing WAV: %d Hz, %d-bit, %d channels\n",
            wav.header.SamplesPerSec, wav.header.bitsPerSample, wav.header.NumOfChannels);
     printf("Data size: %d bytes\n", wav.dataSize);
 
@@ -47,137 +80,138 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
         return;
     }
 
-    // Seek to audio data start
     f_lseek(&fil, wav.dataStartPosition);
 
     UINT br;
     uint32_t bytes_per_frame = (wav.header.bitsPerSample / 8) * wav.header.NumOfChannels;
-    uint32_t total_frames = wav.dataSize / bytes_per_frame;
-    
-    // Calculate sample timing - use hardware timer for precise playback
-    uint32_t sample_period_us = 1000000 / wav.header.SamplesPerSec;
-    
-    // Use much larger buffers - 8KB each for double buffering
-    const uint32_t BUFFER_SIZE = 8192;
-    uint8_t* read_buffer = (uint8_t*)malloc(BUFFER_SIZE);
-    if (!read_buffer) {
-        printf("ERROR: Could not allocate buffer\n");
+    uint32_t total_frames    = wav.dataSize / bytes_per_frame;
+
+    // Pre-fill buffer A on core 0 before launching core 1
+    fr = f_read(&fil, audio_buffer_a, BUFFER_SIZE, &br);
+    buffer_a_bytes = br;
+    if (fr != FR_OK || buffer_a_bytes == 0)
+    {
+        pwm_set_gpio_level(pwm_gpio, 2048);
         f_close(&fil);
         return;
     }
-    
-    uint32_t buffer_index = BUFFER_SIZE; // Start empty
-    uint32_t bytes_in_buffer = 0;
-    
-    // Use absolute timing to prevent drift
+
+    // Hand the file handle to core 1 and start it
+    g_playback_fil = &fil;
+    multicore_reset_core1();
+    multicore_launch_core1(core1_sd_reader);
+
+    // Ask core 1 to fill buffer B immediately while we play buffer A
+    multicore_fifo_push_blocking(2);
+
     uint64_t start_time = time_us_64();
-    uint64_t next_sample_time = start_time;
-    
-    // Pre-fill buffer before starting
-    fr = f_read(&fil, read_buffer, BUFFER_SIZE, &br);
-    bytes_in_buffer = br;
-    buffer_index = 0;
-    
+
+    uint8_t  *active_buf          = audio_buffer_a;
+    uint32_t  active_bytes        = buffer_a_bytes;
+    uint8_t  *pending_buf         = audio_buffer_b;
+    bool      pending_read_active = true; // core 1 is filling pending_buf
+    uint32_t  buf_offset          = 0;
+
     printf("Starting playback...\n");
-    
-    // Stream audio frames with improved buffering
-    for (uint32_t frame = 0; frame < total_frames && fr == FR_OK; frame++)
+
+    for (uint32_t frame = 0; frame < total_frames; frame++)
     {
-        // Refill buffer when we're running low (not empty)
-        // This gives us time to read without disrupting playback
-        if (buffer_index + bytes_per_frame * 512 > bytes_in_buffer && bytes_in_buffer == BUFFER_SIZE) 
+        // If the active buffer is exhausted, swap in the pending one
+        if (buf_offset + bytes_per_frame > active_bytes)
         {
-            // Copy remaining data to start of buffer
-            uint32_t remaining = bytes_in_buffer - buffer_index;
-            if (remaining > 0) {
-                memmove(read_buffer, read_buffer + buffer_index, remaining);
+            if (!pending_read_active)
+                break;
+
+            // Block until core 1 has finished filling the pending buffer.
+            // Core 1 had a full buffer duration (~256 ms at 16 kHz) of headroom
+            // so this almost never stalls.
+            multicore_fifo_pop_blocking();
+
+            uint32_t pending_bytes = (pending_buf == audio_buffer_b)
+                                     ? buffer_b_bytes : buffer_a_bytes;
+
+            if (pending_bytes == BUFFER_SIZE)
+            {
+                // More data exists: ask core 1 to refill the just-played buffer
+                uint32_t refill_cmd = (active_buf == audio_buffer_a) ? 1 : 2;
+                multicore_fifo_push_blocking(refill_cmd);
             }
-            
-            // Read more data
-            fr = f_read(&fil, read_buffer + remaining, BUFFER_SIZE - remaining, &br);
-            bytes_in_buffer = remaining + br;
-            buffer_index = 0;
+            else
+            {
+                pending_read_active = false; // last chunk
+            }
+
+            uint8_t *old_active = active_buf;
+            active_buf   = pending_buf;
+            active_bytes = pending_bytes;
+            pending_buf  = old_active;
+            buf_offset   = 0;
+
+            if (active_bytes == 0)
+                break;
         }
-        
+
+        // Output one sample from the active buffer
         if (wav.header.bitsPerSample == 16)
         {
-            if (buffer_index + bytes_per_frame <= bytes_in_buffer)
+            if (buf_offset + bytes_per_frame <= active_bytes)
             {
-                // Read 16-bit signed sample (little-endian)
-                int16_t sample = (int16_t)(read_buffer[buffer_index] | (read_buffer[buffer_index + 1] << 8));
-                buffer_index += 2;
-                
-                // If stereo, average both channels for better quality
-                if (wav.header.NumOfChannels == 2) {
-                    int16_t sample_r = (int16_t)(read_buffer[buffer_index] | (read_buffer[buffer_index + 1] << 8));
-                    buffer_index += 2;
-                    sample = (sample + sample_r) / 2; // Average the channels
+                int16_t sample = (int16_t)(active_buf[buf_offset] | (active_buf[buf_offset + 1] << 8));
+                buf_offset += 2;
+
+                if (wav.header.NumOfChannels == 2)
+                {
+                    int16_t sample_r = (int16_t)(active_buf[buf_offset] | (active_buf[buf_offset + 1] << 8));
+                    buf_offset += 2;
+                    sample = (sample + sample_r) / 2;
                 }
-                
-                // Convert 16-bit signed (-32768 to 32767) to 12-bit PWM (0 to 4095)
+
                 uint16_t pwm_value = ((sample >> 4) + 2048) & 0xFFF;
                 pwm_set_gpio_level(pwm_gpio, pwm_value);
             }
             else
             {
-                // Silence if we run out of data
                 pwm_set_gpio_level(pwm_gpio, 2048);
             }
         }
         else if (wav.header.bitsPerSample == 8)
         {
-            if (buffer_index < bytes_in_buffer)
+            if (buf_offset < active_bytes)
             {
-                // 8-bit unsigned PCM (0-255)
-                uint8_t sample = read_buffer[buffer_index];
-                buffer_index++;
-                
-                // If stereo, average both channels
-                if (wav.header.NumOfChannels == 2 && buffer_index < bytes_in_buffer) {
-                    uint8_t sample_r = read_buffer[buffer_index];
-                    buffer_index++;
+                uint8_t sample = active_buf[buf_offset++];
+
+                if (wav.header.NumOfChannels == 2 && buf_offset < active_bytes)
+                {
+                    uint8_t sample_r = active_buf[buf_offset++];
                     sample = (sample + sample_r) / 2;
                 }
-                
-                // Convert 8-bit (0-255) to 12-bit (0-4095)
-                uint16_t pwm_value = (sample << 4) | (sample >> 4); // Expand to 12-bit
+
+                uint16_t pwm_value = (sample << 4) | (sample >> 4);
                 pwm_set_gpio_level(pwm_gpio, pwm_value);
             }
             else
             {
-                // Silence
                 pwm_set_gpio_level(pwm_gpio, 2048);
             }
         }
-        
-        // Calculate next sample time
-        next_sample_time = start_time + ((frame + 1) * 1000000ULL / wav.header.SamplesPerSec);
-        
-        // Wait for the right time - but don't wait if we're already late
-        uint64_t current_time = time_us_64();
-        if (current_time < next_sample_time) {
-            // Only sleep if we have more than 10us to wait
-            int64_t wait_time = next_sample_time - current_time;
-            if (wait_time > 10) {
-                sleep_us(wait_time - 5); // Sleep most of it, then busy-wait
-            }
-            // Busy-wait for the last few microseconds for precision
-            while (time_us_64() < next_sample_time) {
-                tight_loop_contents();
-            }
-        } else if (current_time > next_sample_time + 1000) {
-            // We're falling behind significantly - report it
-            if (frame % 1000 == 0) {
-                printf("Warning: audio timing drift at frame %lu\n", frame);
-            }
-        }
+
+        // Absolute timing prevents cumulative drift
+        uint64_t next_sample_time = start_time + ((uint64_t)(frame + 1) * 1000000ULL / wav.header.SamplesPerSec);
+        while (time_us_64() < next_sample_time)
+            tight_loop_contents();
     }
 
-    // Output center (silence) when done
+    // Drain any pending core 1 response before sending the stop command,
+    // otherwise both cores would deadlock trying to push simultaneously.
+    if (pending_read_active)
+        multicore_fifo_pop_blocking();
+
+    multicore_fifo_push_blocking(0); // stop core 1
+    multicore_fifo_pop_blocking();   // wait for ack
+    multicore_reset_core1();
+
     pwm_set_gpio_level(pwm_gpio, 2048);
-    
-    free(read_buffer);
     f_close(&fil);
-    
+
     printf("Playback complete\n");
 }
