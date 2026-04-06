@@ -120,14 +120,14 @@ Step-by-step:
 ## 4 – Phone hook switch (GPIO 22)
 
 The telephone handset rests on a spring-loaded hook switch.  The switch is
-**closed** when the handset is in the cradle (on hook) and **open** when the
+**open** when the handset is in the cradle (on hook) and **closed** when the
 handset is lifted (off hook).
 
 Wire one terminal of the switch to **GPIO 22 (physical pin 29)** and the other
 terminal to **GND**.  The firmware enables the internal pull-up resistor, so:
 
-- **On hook** (circuit closed) → GPIO reads **LOW**
-- **Off hook** (circuit open) → GPIO reads **HIGH** (pulled to 3.3 V)
+- **On hook** (circuit open) → GPIO reads **HIGH** (pulled to 3.3 V)
+- **Off hook** (circuit closed) → GPIO reads **LOW**
 
 ```
 GPIO 22 (pin 29) ──── HOOK SWITCH ──── GND (pin 38)
@@ -136,8 +136,21 @@ GPIO 22 (pin 29) ──── HOOK SWITCH ──── GND (pin 38)
 No additional components are required.  The firmware registers an interrupt on
 both edges:
 
-- **Rising edge** (LOW → HIGH): handset lifted – start greeting playback then recording.
-- **Falling edge** (HIGH → LOW): handset replaced – stop the active recording.
+- **Falling edge** (HIGH → LOW): handset lifted – start greeting playback then recording.
+- **Rising edge** (LOW → HIGH): handset replaced – stop the active recording.
+
+```
+                 ┌─────────────────────────────────────┐
+                 │         Raspberry Pi Pico            │
+  3V3 (pin 36) ──┤ internal                             │
+                 │ pull-up ──── GPIO 22 (pin 29) ────────┼──── HOOK SWITCH terminal A
+                 │                                      │
+  GND (pin 38) ──┤────────────────────────────────────────────── HOOK SWITCH terminal B
+                 └─────────────────────────────────────┘
+
+  On hook  (handset in cradle): switch OPEN   → GPIO 22 reads HIGH (3.3 V via pull-up)
+  Off hook (handset lifted)   : switch CLOSED → GPIO 22 reads LOW  (0 V via GND)
+```
 
 ---
 
