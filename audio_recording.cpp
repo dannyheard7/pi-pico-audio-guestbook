@@ -12,21 +12,24 @@ using std::string;
 // Analogue microphone recording via ADC + ping-pong DMA
 // ---------------------------------------------------------------------------
 
-// RP2040 ADC runs at 48 MHz; each conversion takes 96 ADC clock cycles.
-static const uint32_t ADC_CLOCK_HZ              = 48000000;
-static const uint32_t ADC_CYCLES_PER_CONVERSION = 96;
+// RP2040 ADC runs at 48 MHz; trigger period = (1 + clkdiv) ADC clock cycles.
+static const uint32_t ADC_CLOCK_HZ = 48000000;
 
 // Two equally-sized capture buffers that DMA alternates between.
 // Each buffer holds RECORD_BUFFER_SAMPLES *output* samples worth of raw ADC
 // data (RECORD_BUFFER_SAMPLES × OVERSAMPLE raw 16-bit words).
-// At 16 kHz mono with 4× oversampling the Pico fills one buffer every
-// ~128 ms, giving the CPU ample time to write the other buffer to the SD card.
+// At 22050 Hz mono with 4× oversampling the Pico fills one buffer every
+// ~93 ms, giving the CPU ample time to write the other buffer to the SD card.
 static const uint32_t RECORD_BUFFER_SAMPLES = 2048;
 
 // Oversampling factor: the ADC captures OVERSAMPLE raw readings per output
 // sample.  Averaging them reduces the noise floor by ~3 dB per doubling, so
 // 4× oversampling yields roughly +6 dB SNR improvement over the raw ADC.
-// The RP2040 ADC has ~8.7 ENOB; with 4× oversampling this approaches ~10 ENOB.
+// OVERSAMPLE=16 requires 128 KB of static DMA buffers which exhausts the
+// RP2040's 264 KB SRAM alongside FatFS and SD card buffers, corrupting
+// DMA timing and causing the recorded pitch to be shifted downward.
+// OVERSAMPLE=4 uses only 32 KB and keeps the ADC clock divider in a stable
+// range (clkdiv≈4.67 at 22050 Hz, vs ≈0.42 with OVERSAMPLE=16).
 static const uint32_t OVERSAMPLE = 4;
 static const uint32_t RAW_BUFFER_SAMPLES = RECORD_BUFFER_SAMPLES * OVERSAMPLE;
 static uint16_t rec_buffer_a[RAW_BUFFER_SAMPLES];
@@ -96,6 +99,8 @@ static void write_adc_samples(FIL *file, const uint16_t *raw,
         int32_t avg_q8 = avg << 8;
         rec_dc_midpoint_q8 += (avg_q8 - rec_dc_midpoint_q8) >> 8;
         int32_t centred_q8 = avg_q8 - rec_dc_midpoint_q8;
+        // Shift Q8 fixed-point down by 4 to scale the 12-bit ADC range (±2048)
+        // to the full 16-bit signed PCM range (±32767).
         int32_t sample = centred_q8 >> 4;
         if (sample > 32767) sample = 32767;
         if (sample < -32768) sample = -32768;
@@ -132,10 +137,12 @@ void record_wav_adc(const string output_path,
 
     // Clock divider: run the ADC at sample_rate * OVERSAMPLE so that we
     // capture OVERSAMPLE raw readings per output sample.
-    // clkdiv = (ADC_CLOCK_HZ / (sample_rate * OVERSAMPLE * ADC_CYCLES_PER_CONVERSION)) - 1
+    // The clkdiv register sets the trigger interval in ADC clock cycles:
+    //   trigger period = (1 + clkdiv) ADC clock cycles
+    // The 96-cycle conversion time is already included in that period.
+    //   clkdiv = (ADC_CLOCK_HZ / (sample_rate * OVERSAMPLE)) - 1
     float clkdiv = (float)ADC_CLOCK_HZ /
-                   ((float)sample_rate * (float)OVERSAMPLE *
-                    (float)ADC_CYCLES_PER_CONVERSION) - 1.0f;
+                   ((float)sample_rate * (float)OVERSAMPLE) - 1.0f;
     if (clkdiv < 0.0f) clkdiv = 0.0f;
     adc_set_clkdiv(clkdiv);
 
@@ -230,17 +237,29 @@ void record_wav_adc(const string output_path,
 
     printf("Recording started. Call stop_recording() to stop.\n");
 
+    // Discard the first two buffers so the DC tracking filter can settle
+    // before any audio is written to file.  This avoids a loud thump at the
+    // start of every recording caused by the filter initialising from 2048
+    // when the actual MAX4466 midpoint may differ slightly.
+    uint32_t discard_buffers = 2;
+
     while (recording_active)
     {
         if (rec_buf_a_ready)
         {
             rec_buf_a_ready = false;
-            write_adc_samples(&file, rec_buffer_a, RAW_BUFFER_SAMPLES, &data_size);
+            if (discard_buffers > 0)
+                --discard_buffers;
+            else
+                write_adc_samples(&file, rec_buffer_a, RAW_BUFFER_SAMPLES, &data_size);
         }
         if (rec_buf_b_ready)
         {
             rec_buf_b_ready = false;
-            write_adc_samples(&file, rec_buffer_b, RAW_BUFFER_SAMPLES, &data_size);
+            if (discard_buffers > 0)
+                --discard_buffers;
+            else
+                write_adc_samples(&file, rec_buffer_b, RAW_BUFFER_SAMPLES, &data_size);
         }
         tight_loop_contents();
     }

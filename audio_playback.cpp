@@ -211,6 +211,14 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
     multicore_reset_core1();
 
     pwm_set_gpio_level(pwm_gpio, 2048);
+    // Disable the PWM slice so the ~30.5 kHz carrier stops switching.
+    // Leaving it running couples HF noise into the 3.3 V supply and from
+    // there into the MAX4466 / ADC during recording.
+    pwm_set_enabled(pwm_gpio_to_slice_num(pwm_gpio), false);
+    // Return the pin to a plain low output so it doesn't float.
+    gpio_set_function(pwm_gpio, GPIO_FUNC_SIO);
+    gpio_set_dir(pwm_gpio, GPIO_OUT);
+    gpio_put(pwm_gpio, 0);
     f_close(&fil);
 
     printf("Playback complete\n");
