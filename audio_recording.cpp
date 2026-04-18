@@ -42,6 +42,17 @@ static int16_t rec_convert_buf[RECORD_BUFFER_SAMPLES];
 // MAX4466 boards bias the output near VCC/2, but the exact midpoint varies
 // by module, gain setting, and supply voltage.
 static int32_t rec_dc_midpoint_q8 = (2048 << 8);
+// Previous samples used by a tiny low-pass FIR to tame high-frequency hiss.
+static int32_t rec_prev_sample_1 = 0;
+static int32_t rec_prev_sample_2 = 0;
+
+// Recording post-processing:
+// - small FIR low-pass for hiss reduction
+// - noise gate to mute low-level background floor
+// - gain boost so voice recordings are louder
+static const int32_t REC_NOISE_GATE_THRESHOLD = 320;
+static const int32_t REC_GAIN_NUMERATOR = 9;
+static const int32_t REC_GAIN_DENOMINATOR = 5;
 
 // DMA channel handles (-1 = not claimed).
 static int rec_dma_chan_a = -1;
@@ -102,9 +113,23 @@ static void write_adc_samples(FIL *file, const uint16_t *raw,
         // Shift Q8 fixed-point down by 4 to scale the 12-bit ADC range (±2048)
         // to the full 16-bit signed PCM range (±32767).
         int32_t sample = centred_q8 >> 4;
-        if (sample > 32767) sample = 32767;
-        if (sample < -32768) sample = -32768;
-        rec_convert_buf[i] = (int16_t)sample;
+
+        // 3-tap smoothing FIR (1, 2, 1)/4 to suppress harsh HF noise while
+        // preserving intelligible speech.
+        int32_t filtered = (sample + (rec_prev_sample_1 << 1) + rec_prev_sample_2) >> 2;
+        rec_prev_sample_2 = rec_prev_sample_1;
+        rec_prev_sample_1 = sample;
+
+        // Mute very quiet residual noise between spoken words.
+        int32_t abs_filtered = filtered >= 0 ? filtered : -filtered;
+        if (abs_filtered < REC_NOISE_GATE_THRESHOLD)
+            filtered = 0;
+
+        // Boost level so recorded playback is louder.
+        int32_t boosted = (filtered * REC_GAIN_NUMERATOR) / REC_GAIN_DENOMINATOR;
+        if (boosted > 32767) boosted = 32767;
+        if (boosted < -32768) boosted = -32768;
+        rec_convert_buf[i] = (int16_t)boosted;
     }
     UINT bw;
     f_write(file, rec_convert_buf, out_count * sizeof(int16_t), &bw);
@@ -122,6 +147,8 @@ void record_wav_adc(const string output_path,
     printf("ADC recording: GPIO %u, %lu Hz -> %s\n",
            adc_gpio, (unsigned long)sample_rate, output_path.c_str());
     rec_dc_midpoint_q8 = (2048 << 8);
+    rec_prev_sample_1 = 0;
+    rec_prev_sample_2 = 0;
 
     // ------------------------------------------------------------------
     // ADC setup
