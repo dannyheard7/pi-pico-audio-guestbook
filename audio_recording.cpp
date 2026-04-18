@@ -45,13 +45,14 @@ static int32_t rec_dc_midpoint_q8 = (2048 << 8);
 // Previous samples used by a tiny low-pass FIR to tame high-frequency hiss.
 static int32_t rec_prev_sample_1 = 0;
 static int32_t rec_prev_sample_2 = 0;
+static bool rec_filter_primed = false;
 
 // Recording post-processing:
 // - small FIR low-pass for hiss reduction
 // - noise gate to mute low-level background floor
 // - gain boost so voice recordings are louder
 static const int32_t REC_NOISE_GATE_THRESHOLD = 320;
-static const int32_t REC_GAIN_Q8 = 461; // ~1.80x
+static const int32_t REC_GAIN_Q8 = 461; // Q8 fixed-point: 461/256 = ~1.80x
 
 // DMA channel handles (-1 = not claimed).
 static int rec_dma_chan_a = -1;
@@ -112,6 +113,12 @@ static void write_adc_samples(FIL *file, const uint16_t *raw,
         // Shift Q8 fixed-point down by 4 to scale the 12-bit ADC range (±2048)
         // to the full 16-bit signed PCM range (±32767).
         int32_t sample = centred_q8 >> 4;
+        if (!rec_filter_primed)
+        {
+            rec_prev_sample_1 = sample;
+            rec_prev_sample_2 = sample;
+            rec_filter_primed = true;
+        }
 
         // 3-tap smoothing FIR (1, 2, 1)/4 to suppress harsh HF noise while
         // preserving intelligible speech.
@@ -148,6 +155,7 @@ void record_wav_adc(const string output_path,
     rec_dc_midpoint_q8 = (2048 << 8);
     rec_prev_sample_1 = 0;
     rec_prev_sample_2 = 0;
+    rec_filter_primed = false;
 
     // ------------------------------------------------------------------
     // ADC setup
