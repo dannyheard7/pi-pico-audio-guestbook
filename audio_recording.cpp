@@ -51,6 +51,8 @@ static bool rec_filter_primed = false;
 // - small FIR low-pass for hiss reduction
 // - noise gate to mute low-level background floor
 // - gain boost so voice recordings are louder
+// Applied after 12-bit ADC data is centred and scaled to PCM-ish units
+// (sample = centred_q8 >> 4, roughly ±8192 before gain).
 static const int32_t REC_NOISE_GATE_THRESHOLD = 320;
 static const int32_t REC_GAIN_Q8 = 461; // Q8 fixed-point: 461/256 = ~1.80x
 
