@@ -63,9 +63,7 @@ connected directly for monitoring but will be very quiet.
 
 `record_wav_adc()` reads from **GPIO 26 (ADC0, pin 31)** by default.
 
-### Option A – **MAX4466** microphone amplifier breakout board (recommended)
-
-The build is now designed around the **MAX4466 electret microphone amplifier**
+The build is designed around the **MAX4466 electret microphone amplifier**
 module.  It already includes the electret capsule, biasing, and gain stage, and
 provides an analogue output centred near half the supply voltage for direct ADC use.
 
@@ -79,44 +77,6 @@ No extra components are required between OUT and GPIO 26.
 
 > Set the MAX4466 gain trimmer low-to-mid to start, then increase gradually
 > while monitoring recordings to avoid clipping.
-
-### Option B – Bare electret microphone capsule (2-pin)
-
-A raw electret capsule needs a pull-up resistor (bias) and an AC-coupling
-capacitor to correctly drive the ADC input.
-
-| Component | Value    | Purpose                                   |
-|-----------|----------|-------------------------------------------|
-| R1        | 10 kΩ    | Drain pull-up / bias current limiter      |
-| R2        | 10 kΩ    | Voltage-divider top half (sets mid-point) |
-| R3        | 10 kΩ    | Voltage-divider bottom half               |
-| C1        | 100 nF   | AC coupling (blocks DC bias from ADC pin) |
-
-> R2/R3 create a 1.65 V mid-point so the microphone signal is centred in the
-> ADC input range (0–3.3 V).
-
-```
-3V3 (pin 36) ──┬── R1 (10 kΩ) ──── MIC+  (capsule drain / signal pin)
-               │
-               R2 (10 kΩ)
-               │
-               ├── (mid-point node) ──── C1 (100 nF) ──── GPIO 26 (pin 31)
-               │
-               R3 (10 kΩ)
-               │
-              GND                        MIC−  (capsule source) ──── GND (pin 38)
-```
-
-Step-by-step:
-
-1. Connect **3V3** through **R1** to the **+** (signal) pin of the capsule.
-2. Connect the capsule **−** pin to **GND**.
-3. Wire **R2** from 3V3 to a mid-point node, and **R3** from that node to GND.
-4. Connect the mid-point through **C1** (100 nF) to **GPIO 26**.  The capacitor
-   passes only the AC audio component to the ADC while blocking the DC bias.
-
-> Electret capsules are polarised.  The pin connected to the internal FET gate
-> (usually the longer leg or the one marked +) is the signal output.
 
 ---
 

@@ -24,7 +24,7 @@ static const uint MIC_ADC_GPIO = 26;
 // GPIO for PWM audio output
 static const uint AUDIO_OUT_GPIO = 18;
 // Sample rate used for recording
-static const uint32_t RECORD_SAMPLE_RATE = 22050;
+static const uint32_t RECORD_SAMPLE_RATE = 16000;
 // Directory on the SD card that stores incoming recordings
 static const char *RECORDINGS_DIR = "0:/recordings";
 // Directory on the SD card that contains the greeting prompt(s)
