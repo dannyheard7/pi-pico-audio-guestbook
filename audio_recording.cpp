@@ -20,7 +20,7 @@ static const uint32_t ADC_CLOCK_HZ = 48000000;
 // data (RECORD_BUFFER_SAMPLES × OVERSAMPLE raw 16-bit words).
 // At 22050 Hz mono with 4× oversampling the Pico fills one buffer every
 // ~93 ms, giving the CPU ample time to write the other buffer to the SD card.
-static const uint32_t RECORD_BUFFER_SAMPLES = 2048;
+static const uint32_t RECORD_BUFFER_SAMPLES = 4096;
 
 // Oversampling factor: the ADC captures OVERSAMPLE raw readings per output
 // sample.  Averaging them reduces the noise floor by ~3 dB per doubling, so
