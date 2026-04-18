@@ -63,19 +63,22 @@ connected directly for monitoring but will be very quiet.
 
 `record_wav_adc()` reads from **GPIO 26 (ADC0, pin 31)** by default.
 
-### Option A – Microphone amplifier breakout board (recommended)
+### Option A – **MAX4466** microphone amplifier breakout board (recommended)
 
-Pre-built amplifier modules such as the **MAX4466**, **MAX9814**, or **KY-037/KY-038**
-include the bias resistor, decoupling capacitor, and gain stage.  They present a
-0 V – 3.3 V centred output that feeds directly into the Pico ADC.
+The build is now designed around the **MAX4466 electret microphone amplifier**
+module.  It already includes the electret capsule, biasing, and gain stage, and
+provides an analogue output centred near half the supply voltage for direct ADC use.
 
 ```
-Pico 3V3  (pin 36) ──── VCC
-Pico GND  (pin 38) ──── GND
-Module AOUT         ──── GPIO 26 / ADC0  (pin 31)
+Pico 3V3  (pin 36) ──── MAX4466 VCC
+Pico GND  (pin 38) ──── MAX4466 GND
+MAX4466 OUT         ──── GPIO 26 / ADC0  (pin 31)
 ```
 
-No extra components are required.
+No extra components are required between OUT and GPIO 26.
+
+> Set the MAX4466 gain trimmer low-to-mid to start, then increase gradually
+> while monitoring recordings to avoid clipping.
 
 ### Option B – Bare electret microphone capsule (2-pin)
 
@@ -169,4 +172,3 @@ record_wav_adc("0:/recordings/guestbook.wav", 26, 16000);
 WavFile wav = /* load from SD */;
 play_wav_pwm(wav, 18);
 ```
-
