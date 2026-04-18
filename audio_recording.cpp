@@ -35,6 +35,10 @@ static uint16_t rec_buffer_b[RAW_BUFFER_SAMPLES];
 // Scratch buffer used to convert 12-bit unsigned ADC values to 16-bit signed
 // PCM before writing to the file (avoids a large stack allocation).
 static int16_t rec_convert_buf[RECORD_BUFFER_SAMPLES];
+// Running estimate of the ADC DC midpoint in Q8 fixed-point.
+// MAX4466 boards bias the output near VCC/2, but the exact midpoint varies
+// by module, gain setting, and supply voltage.
+static int32_t rec_dc_midpoint_q8 = (2048 << 8);
 
 // DMA channel handles (-1 = not claimed).
 static int rec_dma_chan_a = -1;
@@ -85,10 +89,17 @@ static void write_adc_samples(FIL *file, const uint16_t *raw,
         for (uint32_t j = 0; j < OVERSAMPLE; j++)
             sum += (int32_t)(raw[i * OVERSAMPLE + j] & 0x0FFF);
 
-        // Average, centre at 2048, scale to signed 16-bit PCM.
-        // averaged range: (0-2048)*16 = -32768  to  (4095-2048)*16 = 32752
+        // Average and remove DC bias before scaling to signed 16-bit PCM.
+        // Track the midpoint with a light low-pass filter so MAX4466 DC offset
+        // changes do not get baked into the recording.
         int32_t avg = sum / (int32_t)OVERSAMPLE;
-        rec_convert_buf[i] = (int16_t)((avg - 2048) * 16);
+        int32_t avg_q8 = avg << 8;
+        rec_dc_midpoint_q8 += (avg_q8 - rec_dc_midpoint_q8) >> 8;
+        int32_t centred_q8 = avg_q8 - rec_dc_midpoint_q8;
+        int32_t sample = centred_q8 >> 4;
+        if (sample > 32767) sample = 32767;
+        if (sample < -32768) sample = -32768;
+        rec_convert_buf[i] = (int16_t)sample;
     }
     UINT bw;
     f_write(file, rec_convert_buf, out_count * sizeof(int16_t), &bw);
@@ -105,6 +116,7 @@ void record_wav_adc(const string output_path,
 {
     printf("ADC recording: GPIO %u, %lu Hz -> %s\n",
            adc_gpio, (unsigned long)sample_rate, output_path.c_str());
+    rec_dc_midpoint_q8 = (2048 << 8);
 
     // ------------------------------------------------------------------
     // ADC setup
