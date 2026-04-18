@@ -51,8 +51,7 @@ static int32_t rec_prev_sample_2 = 0;
 // - noise gate to mute low-level background floor
 // - gain boost so voice recordings are louder
 static const int32_t REC_NOISE_GATE_THRESHOLD = 320;
-static const int32_t REC_GAIN_NUMERATOR = 9;
-static const int32_t REC_GAIN_DENOMINATOR = 5;
+static const int32_t REC_GAIN_Q8 = 461; // ~1.80x
 
 // DMA channel handles (-1 = not claimed).
 static int rec_dma_chan_a = -1;
@@ -126,7 +125,7 @@ static void write_adc_samples(FIL *file, const uint16_t *raw,
             filtered = 0;
 
         // Boost level so recorded playback is louder.
-        int32_t boosted = (filtered * REC_GAIN_NUMERATOR) / REC_GAIN_DENOMINATOR;
+        int32_t boosted = (filtered * REC_GAIN_Q8) >> 8;
         if (boosted > 32767) boosted = 32767;
         if (boosted < -32768) boosted = -32768;
         rec_convert_buf[i] = (int16_t)boosted;
