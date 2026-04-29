@@ -18,19 +18,22 @@ static const uint32_t ADC_CLOCK_HZ = 48000000;
 // Two equally-sized capture buffers that DMA alternates between.
 // Each buffer holds RECORD_BUFFER_SAMPLES *output* samples worth of raw ADC
 // data (RECORD_BUFFER_SAMPLES × OVERSAMPLE raw 16-bit words).
-// At 22050 Hz mono with 4× oversampling the Pico fills one buffer every
-// ~93 ms, giving the CPU ample time to write the other buffer to the SD card.
-static const uint32_t RECORD_BUFFER_SAMPLES = 4096;
+// At 16000 Hz mono with 8× oversampling the Pico fills one buffer every
+// ~128 ms, giving the CPU ample time to write the other buffer to the SD card.
+// RECORD_BUFFER_SAMPLES and OVERSAMPLE are chosen so that
+//   RAW_BUFFER_SAMPLES = 2048 × 8 = 16384 → 32 KB per DMA buffer (64 KB total),
+// which fits comfortably alongside FatFS / SD card buffers in the RP2040's
+// 264 KB SRAM.  Increasing OVERSAMPLE without halving RECORD_BUFFER_SAMPLES
+// would double the DMA buffer memory and risk SRAM exhaustion.
+static const uint32_t RECORD_BUFFER_SAMPLES = 2048;
 
 // Oversampling factor: the ADC captures OVERSAMPLE raw readings per output
 // sample.  Averaging them reduces the noise floor by ~3 dB per doubling, so
-// 4× oversampling yields roughly +6 dB SNR improvement over the raw ADC.
-// OVERSAMPLE=16 requires 128 KB of static DMA buffers which exhausts the
-// RP2040's 264 KB SRAM alongside FatFS and SD card buffers, corrupting
-// DMA timing and causing the recorded pitch to be shifted downward.
-// OVERSAMPLE=4 uses only 32 KB and keeps the ADC clock divider in a stable
-// range (clkdiv≈4.67 at 22050 Hz, vs ≈0.42 with OVERSAMPLE=16).
-static const uint32_t OVERSAMPLE = 4;
+// 8× oversampling yields roughly +9 dB SNR improvement over a single raw ADC
+// reading (+3 dB over the previous 4× configuration).
+// RECORD_BUFFER_SAMPLES was halved to keep RAW_BUFFER_SAMPLES (and therefore
+// DMA buffer memory) identical to the 4×-oversample baseline.
+static const uint32_t OVERSAMPLE = 8;
 static const uint32_t RAW_BUFFER_SAMPLES = RECORD_BUFFER_SAMPLES * OVERSAMPLE;
 static uint16_t rec_buffer_a[RAW_BUFFER_SAMPLES];
 static uint16_t rec_buffer_b[RAW_BUFFER_SAMPLES];
@@ -42,6 +45,9 @@ static int16_t rec_convert_buf[RECORD_BUFFER_SAMPLES];
 // MAX4466 boards bias the output near VCC/2, but the exact midpoint varies
 // by module, gain setting, and supply voltage.
 static int32_t rec_dc_midpoint_q8 = (2048 << 8);
+// State for a first-order IIR low-pass filter applied after DC removal.
+// Attenuates high-frequency ADC noise above the voice band.
+static int32_t rec_lp_filter_state = 0;
 
 // DMA channel handles (-1 = not claimed).
 static int rec_dma_chan_a = -1;
@@ -104,7 +110,12 @@ static void write_adc_samples(FIL *file, const uint16_t *raw,
         int32_t sample = centred_q8 >> 4;
         if (sample > 32767) sample = 32767;
         if (sample < -32768) sample = -32768;
-        rec_convert_buf[i] = (int16_t)sample;
+        // First-order IIR low-pass filter: y[n] = 0.75·x[n] + 0.25·y[n-1]
+        // -3 dB cutoff ≈ 3.7 kHz at a 16 kHz sample rate, which preserves
+        // the full telephone voice band (300–3400 Hz) while attenuating
+        // high-frequency ADC switching noise.
+        rec_lp_filter_state = (3 * sample + rec_lp_filter_state) >> 2;
+        rec_convert_buf[i] = (int16_t)rec_lp_filter_state;
     }
     UINT bw;
     f_write(file, rec_convert_buf, out_count * sizeof(int16_t), &bw);
@@ -122,18 +133,25 @@ void record_wav_adc(const string output_path,
     printf("ADC recording: GPIO %u, %lu Hz -> %s\n",
            adc_gpio, (unsigned long)sample_rate, output_path.c_str());
     rec_dc_midpoint_q8 = (2048 << 8);
+    rec_lp_filter_state = 0;
 
     // ------------------------------------------------------------------
     // ADC setup
     // adc_gpio must be one of GPIO 26 (ADC0), 27 (ADC1), or 28 (ADC2).
     // ------------------------------------------------------------------
     adc_init();
+    // The RP2040 temperature sensor shares the ADC and its leakage increases
+    // noise on all other ADC channels; disable it for cleaner recordings.
+    adc_set_temp_sensor_enabled(false);
     adc_gpio_init(adc_gpio);
     adc_select_input(adc_gpio - 26u);
 
     // Enable the FIFO and wire it to DMA.  No error bit, no 8-bit shift
     // (keep full 12-bit result right-aligned in a 16-bit word).
     adc_fifo_setup(true, true, 1, false, false);
+    // Flush any samples left in the FIFO from a previous ADC run so the
+    // DMA buffers start with fresh data.
+    adc_fifo_drain();
 
     // Clock divider: run the ADC at sample_rate * OVERSAMPLE so that we
     // capture OVERSAMPLE raw readings per output sample.
