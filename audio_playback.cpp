@@ -241,7 +241,9 @@ void play_tone_pwm(const uint pwm_gpio, const uint32_t frequency_hz, const uint3
 
     uint64_t start_time = time_us_64();
 
-    for (uint32_t i = 0; i < total_samples; i++)
+    playback_active = true;
+
+    for (uint32_t i = 0; i < total_samples && playback_active; i++)
     {
         float    t         = (float)i / (float)sample_rate;
         float    sin_val   = sinf(two_pi_f * t);
