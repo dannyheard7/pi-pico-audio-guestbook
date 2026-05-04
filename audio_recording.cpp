@@ -128,12 +128,14 @@ void record_wav_adc(const string output_path,
     // adc_gpio must be one of GPIO 26 (ADC0), 27 (ADC1), or 28 (ADC2).
     // ------------------------------------------------------------------
     adc_init();
+    adc_set_temp_sensor_enabled(false);
     adc_gpio_init(adc_gpio);
     adc_select_input(adc_gpio - 26u);
 
     // Enable the FIFO and wire it to DMA.  No error bit, no 8-bit shift
     // (keep full 12-bit result right-aligned in a 16-bit word).
     adc_fifo_setup(true, true, 1, false, false);
+    adc_fifo_drain();
 
     // Clock divider: run the ADC at sample_rate * OVERSAMPLE so that we
     // capture OVERSAMPLE raw readings per output sample.
