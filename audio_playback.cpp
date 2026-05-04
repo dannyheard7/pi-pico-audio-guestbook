@@ -18,6 +18,16 @@ static volatile uint32_t buffer_a_bytes = 0;
 static volatile uint32_t buffer_b_bytes = 0;
 static FIL *g_playback_fil = nullptr;
 
+// Set to false to ask play_wav_pwm() to stop early.
+static volatile bool playback_active = false;
+
+// Signal play_wav_pwm() to stop early (e.g. handset replaced mid-greeting).
+// Safe to call from an interrupt handler.
+void stop_playback()
+{
+    playback_active = false;
+}
+
 void setup_pwm(const uint gpio, const uint bitsPerSample, uint32_t sampleRate)
 {
     gpio_set_function(gpio, GPIO_FUNC_PWM);
@@ -115,8 +125,9 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
     uint32_t  buf_offset          = 0;
 
     printf("Starting playback...\n");
+    playback_active = true;
 
-    for (uint32_t frame = 0; frame < total_frames; frame++)
+    for (uint32_t frame = 0; frame < total_frames && playback_active; frame++)
     {
         // If the active buffer is exhausted, swap in the pending one
         if (buf_offset + bytes_per_frame > active_bytes)
@@ -211,6 +222,8 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
     multicore_fifo_push_blocking(0); // stop core 1
     multicore_fifo_pop_blocking();   // wait for ack
     multicore_reset_core1();
+
+    playback_active = false;
 
     pwm_set_gpio_level(pwm_gpio, 2048);
     // Disable the PWM slice so the ~30.5 kHz carrier stops switching.

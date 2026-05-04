@@ -5,6 +5,10 @@ using std::string;
 
 void play_wav_pwm(const WavFile& wav, const uint pwm_gpio);
 
+// Signal play_wav_pwm() to stop early (e.g. handset replaced mid-greeting).
+// Safe to call from an interrupt handler.
+void stop_playback();
+
 // Play a synthesised sine-wave tone on the PWM audio output.
 // frequency_hz: tone frequency (e.g. 1000 for a 1 kHz beep)
 // duration_ms:  how long to play the tone in milliseconds
