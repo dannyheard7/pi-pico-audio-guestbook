@@ -8,7 +8,8 @@ void play_wav_pwm(const WavFile& wav, const uint pwm_gpio);
 // Play a synthesised sine-wave tone on the PWM audio output.
 // frequency_hz: tone frequency (e.g. 1000 for a 1 kHz beep)
 // duration_ms:  how long to play the tone in milliseconds
-void play_tone_pwm(const uint pwm_gpio, uint32_t frequency_hz, uint32_t duration_ms);
+// volume:       amplitude scale in the range [0.0, 1.0] (1.0 = full scale)
+void play_tone_pwm(const uint pwm_gpio, uint32_t frequency_hz, uint32_t duration_ms, float volume);
 
 // Record from an analogue microphone connected to an ADC-capable GPIO (26, 27, or 28).
 // Captures audio continuously until stop_recording() is called, then writes a

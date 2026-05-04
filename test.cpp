@@ -25,6 +25,10 @@ static const uint MIC_ADC_GPIO = 26;
 static const uint AUDIO_OUT_GPIO = 18;
 // Sample rate used for recording
 static const uint32_t RECORD_SAMPLE_RATE = 16000;
+// Milliseconds to wait after the handset is lifted before playing the greeting
+static const uint32_t PICKUP_DELAY_MS = 500;
+// Volume of the ready tone: 0.0 (silent) to 1.0 (full scale)
+static const float TONE_VOLUME = 0.5f;
 // Directory on the SD card that stores incoming recordings
 static const char *RECORDINGS_DIR = "0:/recordings";
 // Directory on the SD card that contains the greeting prompt(s)
@@ -121,6 +125,10 @@ int main()
 
         printf("Phone off hook – playing greeting\n");
 
+        // Brief pause so the caller has a moment to bring the handset to
+        // their ear before the greeting begins.
+        sleep_ms(PICKUP_DELAY_MS);
+
         // Play the first available greeting prompt from the SD card.
         vector<unique_ptr<File>> prompts = list_files_in_folder(
             pSD, PROMPTS_DIR, std::make_unique<FileType>(FileType::Wav));
@@ -145,7 +153,7 @@ int main()
         // Play a short beep so the caller knows the guestbook is ready to
         // record their message.
         printf("Playing ready tone\n");
-        play_tone_pwm(AUDIO_OUT_GPIO, 1000, 1000);
+        play_tone_pwm(AUDIO_OUT_GPIO, 1000, 1000, TONE_VOLUME);
 
         // Only start recording if the handset is still off the hook after
         // the tone has finished.
