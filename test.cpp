@@ -142,6 +142,19 @@ int main()
             continue;
         }
 
+        // Play a short beep so the caller knows the guestbook is ready to
+        // record their message.
+        printf("Playing ready tone\n");
+        play_tone_pwm(AUDIO_OUT_GPIO, 1000, 1000);
+
+        // Only start recording if the handset is still off the hook after
+        // the tone has finished.
+        if (!phone_off_hook)
+        {
+            printf("Phone replaced before recording started\n");
+            continue;
+        }
+
         // Record until the handset is replaced.
         // phone_hook_irq() calls stop_recording() on the rising edge,
         // which causes record_wav_adc() to finalise the file and return.

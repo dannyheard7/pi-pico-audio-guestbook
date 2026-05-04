@@ -7,6 +7,7 @@
 #include "pico/multicore.h"
 #include "file.h"
 #include <cstring> // for memmove
+#include <cmath>   // for sinf
 
 // Double-buffer for SD reads (core 1) and PWM playback (core 0)
 static const uint32_t BUFFER_SIZE = 8192;
@@ -222,4 +223,45 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
     f_close(&fil);
 
     printf("Playback complete\n");
+}
+
+void play_tone_pwm(const uint pwm_gpio, const uint32_t frequency_hz, const uint32_t duration_ms)
+{
+    // Configure PWM the same way as audio playback: 12-bit resolution,
+    // full system-clock speed, centre value = 2048.
+    gpio_set_function(pwm_gpio, GPIO_FUNC_PWM);
+    uint slice_num = pwm_gpio_to_slice_num(pwm_gpio);
+    pwm_set_wrap(slice_num, 4095);
+    pwm_set_clkdiv(slice_num, 1.0f);
+    pwm_set_gpio_level(pwm_gpio, 2048);
+    pwm_set_enabled(slice_num, true);
+
+    // Synthesise a sine wave at the requested frequency.
+    const uint32_t sample_rate   = 16000;
+    const uint32_t total_samples = (sample_rate * duration_ms) / 1000;
+    const float    two_pi_f      = 2.0f * (float)M_PI * (float)frequency_hz;
+
+    uint64_t start_time = time_us_64();
+
+    for (uint32_t i = 0; i < total_samples; i++)
+    {
+        float    t         = (float)i / (float)sample_rate;
+        float    sin_val   = sinf(two_pi_f * t);
+        uint16_t pwm_value = (uint16_t)(2048.0f + 2047.0f * sin_val);
+        pwm_set_gpio_level(pwm_gpio, pwm_value);
+
+        // Absolute timing to prevent cumulative drift.
+        uint64_t next_time = start_time + ((uint64_t)(i + 1) * 1000000ULL / sample_rate);
+        while (time_us_64() < next_time)
+            tight_loop_contents();
+    }
+
+    // Shut down PWM cleanly – same pattern as play_wav_pwm().
+    pwm_set_gpio_level(pwm_gpio, 2048);
+    pwm_set_enabled(slice_num, false);
+    gpio_set_function(pwm_gpio, GPIO_FUNC_SIO);
+    gpio_set_dir(pwm_gpio, GPIO_OUT);
+    gpio_put(pwm_gpio, 0);
+
+    printf("Tone complete\n");
 }
