@@ -26,7 +26,7 @@ static const uint AUDIO_OUT_GPIO = 18;
 // Sample rate used for recording
 static const uint32_t RECORD_SAMPLE_RATE = 16000;
 // Milliseconds to wait after the handset is lifted before playing the greeting
-static const uint32_t PICKUP_DELAY_MS = 500;
+static const uint32_t PICKUP_DELAY_MS = 1000;
 // Volume of the ready tone: 0.0 (silent) to 1.0 (full scale)
 static const float TONE_VOLUME = 0.5f;
 // Directory on the SD card that stores incoming recordings
@@ -153,7 +153,7 @@ int main()
         // Play a short beep so the caller knows the guestbook is ready to
         // record their message.
         printf("Playing ready tone\n");
-        play_tone_pwm(AUDIO_OUT_GPIO, 1000, 1000, TONE_VOLUME);
+        play_tone_pwm(AUDIO_OUT_GPIO, 1000, 600, TONE_VOLUME);
 
         // Only start recording if the handset is still off the hook after
         // the tone has finished.
