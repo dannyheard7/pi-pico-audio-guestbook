@@ -263,7 +263,10 @@ void record_wav_adc(const string output_path,
             else
                 write_adc_samples(&file, rec_buffer_b, RAW_BUFFER_SAMPLES, &data_size);
         }
-        tight_loop_contents();
+        // __wfi() puts the CPU into a low-power sleep until the DMA IRQ
+        // (or the phone-hook GPIO IRQ that calls stop_recording()) fires,
+        // avoiding a busy-spin that would otherwise keep the CPU at 100%.
+        __wfi();
     }
 
     // ------------------------------------------------------------------

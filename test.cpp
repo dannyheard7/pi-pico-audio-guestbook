@@ -114,9 +114,12 @@ int main()
     while (true)
     {
         // Wait until the handset is lifted.
+        // __wfi() puts the CPU into a low-power sleep until the next interrupt
+        // fires (i.e. the GPIO IRQ from the hook switch), consuming far less
+        // energy than polling with sleep_ms().
         while (!phone_off_hook)
         {
-            sleep_ms(10);
+            __wfi();
         }
 
         printf("Phone off hook – playing greeting\n");
@@ -151,10 +154,11 @@ int main()
         printf("Recording saved: %s\n", path.c_str());
 
         // Wait for the handset to be fully replaced before listening for
-        // the next pick-up event.
+        // the next pick-up event.  __wfi() keeps the CPU in a low-power
+        // sleep state until the hook-switch GPIO IRQ fires.
         while (phone_off_hook)
         {
-            sleep_ms(10);
+            __wfi();
         }
     }
 
