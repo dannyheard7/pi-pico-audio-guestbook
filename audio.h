@@ -5,6 +5,10 @@ using std::string;
 
 void play_wav_pwm(const WavFile& wav, const uint pwm_gpio);
 
+// Signal play_wav_pwm() to stop early (e.g. handset replaced mid-greeting).
+// Safe to call from an interrupt handler.
+void stop_playback();
+
 // Record from an analogue microphone connected to an ADC-capable GPIO (26, 27, or 28).
 // Captures audio continuously until stop_recording() is called, then writes a
 // 16-bit mono PCM WAV file to output_path on the mounted SD card.

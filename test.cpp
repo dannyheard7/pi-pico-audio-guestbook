@@ -45,6 +45,7 @@ static void phone_hook_irq(uint gpio, uint32_t events)
     {
         // Circuit opens → handset replaced (on hook)
         phone_off_hook = false;
+        stop_playback();  // abort any in-progress greeting
         stop_recording(); // safe to call from an interrupt handler
     }
     if (events & GPIO_IRQ_EDGE_FALL)
