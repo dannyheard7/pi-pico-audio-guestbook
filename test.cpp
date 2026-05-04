@@ -52,9 +52,12 @@ static void phone_hook_irq(uint gpio, uint32_t events)
         stop_playback();  // abort any in-progress greeting
         stop_recording(); // safe to call from an interrupt handler
     }
-    if (events & GPIO_IRQ_EDGE_FALL)
+    else if (events & GPIO_IRQ_EDGE_FALL)
     {
-        // Circuit closes → handset lifted (off hook)
+        // Circuit closes → handset lifted (off hook).
+        // Use else-if so that when both edges are latched together in a single
+        // IRQ call (a common RP2040 switch-bounce artifact) the RISE (on-hook)
+        // state takes priority and stop_playback() is not undone.
         phone_off_hook = true;
     }
 }
