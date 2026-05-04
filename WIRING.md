@@ -67,16 +67,54 @@ The build is designed around the **MAX4466 electret microphone amplifier**
 module.  It already includes the electret capsule, biasing, and gain stage, and
 provides an analogue output centred near half the supply voltage for direct ADC use.
 
+### 3a – Basic connection (no filter)
+
 ```
 Pico 3V3  (pin 36) ──── MAX4466 VCC
 Pico GND  (pin 38) ──── MAX4466 GND
 MAX4466 OUT         ──── GPIO 26 / ADC0  (pin 31)
 ```
 
-No extra components are required between OUT and GPIO 26.
+### 3b – Recommended connection (with anti-aliasing / noise filter)
+
+Adding a simple first-order RC low-pass filter between the MAX4466 output and
+GPIO 26 is **strongly recommended**.  It provides two benefits that the firmware
+alone cannot:
+
+1. **Anti-aliasing** – any signal above the Nyquist frequency (8 kHz at a 16 kHz
+   sample rate) is attenuated *before* it reaches the ADC.  Once noise aliases
+   into the audio band during sampling it cannot be removed in software.
+2. **ADC charge-injection reduction** – the RP2040's ADC has a switched-capacitor
+   input that briefly draws charge from the source during each conversion.  A
+   series resistor limits the resulting glitch and the shunt capacitor helps
+   absorb it, reducing the broadband noise floor.
+
+Use **R = 1 kΩ** and **C = 10 nF** (ceramic) for a −3 dB cutoff of ≈ 15.9 kHz.
+This follows the RP2040 hardware design guidelines, passes the full voice band
+(300–3400 Hz), and provides meaningful attenuation of ADC switching noise at
+higher frequencies.  If you want more aggressive HF rolloff you can increase C
+to 47 nF (≈ 3.4 kHz cutoff) – suitable for telephone-quality speech recording
+but will slightly soften the top of the voice band.
+
+```
+Pico 3V3  (pin 36) ──── MAX4466 VCC
+Pico GND  (pin 38) ──── MAX4466 GND
+
+MAX4466 OUT ──┤ 1 kΩ ├──┬──── GPIO 26 / ADC0  (pin 31)
+                        │
+                       ═╧═  10 nF  (ceramic, e.g. 0.01 µF)
+                       ═╤═
+                        │
+Pico GND  (pin 38) ─────┘
+```
 
 > Set the MAX4466 gain trimmer low-to-mid to start, then increase gradually
 > while monitoring recordings to avoid clipping.
+
+> The firmware also applies software oversampling, DC removal, and a 3.7 kHz
+> IIR low-pass filter after each buffer is captured.  The physical RC filter
+> and the software filter together give significantly better noise rejection
+> than either one alone.
 
 ---
 
