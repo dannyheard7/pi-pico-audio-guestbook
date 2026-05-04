@@ -6,9 +6,9 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "file.h"
-#include <algorithm> // for std::clamp
-#include <cstring>   // for memmove
-#include <cmath>     // for sinf
+#include <algorithm>
+#include <cstring>
+#include <cmath>
 
 // Double-buffer for SD reads (core 1) and PWM playback (core 0)
 static const uint32_t BUFFER_SIZE = 8192;
@@ -20,27 +20,33 @@ static FIL *g_playback_fil = nullptr;
 
 // Set to false to ask play_wav_pwm() to stop early.
 static volatile bool playback_active = false;
-
-// Signal play_wav_pwm() to stop early (e.g. handset replaced mid-greeting).
-// Safe to call from an interrupt handler.
 void stop_playback()
 {
     playback_active = false;
 }
 
-void setup_pwm(const uint gpio, const uint bitsPerSample, uint32_t sampleRate)
+// Shared PWM configuration for audio: 12-bit, centre value, full speed.
+static const uint16_t PWM_WRAP      = 4095;
+static const uint16_t PWM_CENTER    = 2048;
+static const float    PWM_CLKDIV    = 1.0f;
+
+static inline void init_pwm_for_audio(const uint gpio)
 {
     gpio_set_function(gpio, GPIO_FUNC_PWM);
     uint slice_num = pwm_gpio_to_slice_num(gpio);
-    
-    // Use 12-bit resolution for better audio quality
-    // 125MHz / 4096 = ~30.5kHz PWM frequency (above audible range)
-    pwm_set_wrap(slice_num, 4095); // 12-bit resolution (0-4095)
-    pwm_set_clkdiv(slice_num, 1.0f); // Full speed
-    
-    // Start at center for 12-bit
-    pwm_set_gpio_level(gpio, 2048);
+    pwm_set_wrap(slice_num, PWM_WRAP);
+    pwm_set_clkdiv(slice_num, PWM_CLKDIV);
+    pwm_set_gpio_level(gpio, PWM_CENTER);
     pwm_set_enabled(slice_num, true);
+}
+
+static inline void shutdown_pwm_audio(const uint gpio)
+{
+    pwm_set_gpio_level(gpio, PWM_CENTER);
+    pwm_set_enabled(pwm_gpio_to_slice_num(gpio), false);
+    gpio_set_function(gpio, GPIO_FUNC_SIO);
+    gpio_set_dir(gpio, GPIO_OUT);
+    gpio_put(gpio, 0);
 }
 
 // Core 1 entry: handles all SD reads during playback so core 0 is never
@@ -78,11 +84,7 @@ static void core1_sd_reader()
 
 void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
 {
-    setup_pwm(pwm_gpio, wav.header.bitsPerSample, wav.header.SamplesPerSec);
-
-    printf("Playing WAV: %d Hz, %d-bit, %d channels\n",
-           wav.header.SamplesPerSec, wav.header.bitsPerSample, wav.header.NumOfChannels);
-    printf("Data size: %d bytes\n", wav.dataSize);
+    init_pwm_for_audio(pwm_gpio);
 
     FIL fil;
     FRESULT fr = f_open(&fil, wav.path.c_str(), FA_READ);
@@ -103,7 +105,7 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
     buffer_a_bytes = br;
     if (fr != FR_OK || buffer_a_bytes == 0)
     {
-        pwm_set_gpio_level(pwm_gpio, 2048);
+        shutdown_pwm_audio(pwm_gpio);
         f_close(&fil);
         return;
     }
@@ -124,10 +126,9 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
     bool      pending_read_active = true; // core 1 is filling pending_buf
     uint32_t  buf_offset          = 0;
 
-    printf("Starting playback...\n");
     playback_active = true;
 
-    for (uint32_t frame = 0; frame < total_frames && playback_active; frame++)
+    for (uint32_t frame = 0; playback_active && frame < total_frames; frame++)
     {
         // If the active buffer is exhausted, swap in the pending one
         if (buf_offset + bytes_per_frame > active_bytes)
@@ -223,37 +224,16 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
     multicore_fifo_pop_blocking();   // wait for ack
     multicore_reset_core1();
 
-    playback_active = false;
-
-    pwm_set_gpio_level(pwm_gpio, 2048);
-    // Disable the PWM slice so the ~30.5 kHz carrier stops switching.
-    // Leaving it running couples HF noise into the 3.3 V supply and from
-    // there into the MAX4466 / ADC during recording.
-    pwm_set_enabled(pwm_gpio_to_slice_num(pwm_gpio), false);
-    // Return the pin to a plain low output so it doesn't float.
-    gpio_set_function(pwm_gpio, GPIO_FUNC_SIO);
-    gpio_set_dir(pwm_gpio, GPIO_OUT);
-    gpio_put(pwm_gpio, 0);
+    shutdown_pwm_audio(pwm_gpio);
     f_close(&fil);
-
-    printf("Playback complete\n");
 }
 
 void play_tone_pwm(const uint pwm_gpio, const uint32_t frequency_hz, const uint32_t duration_ms, float volume)
 {
-    // Clamp volume to [0.0, 1.0].
     volume = std::clamp(volume, 0.0f, 1.0f);
 
-    // Configure PWM the same way as audio playback: 12-bit resolution,
-    // full system-clock speed, centre value = 2048.
-    gpio_set_function(pwm_gpio, GPIO_FUNC_PWM);
-    uint slice_num = pwm_gpio_to_slice_num(pwm_gpio);
-    pwm_set_wrap(slice_num, 4095);
-    pwm_set_clkdiv(slice_num, 1.0f);
-    pwm_set_gpio_level(pwm_gpio, 2048);
-    pwm_set_enabled(slice_num, true);
+    init_pwm_for_audio(pwm_gpio);
 
-    // Synthesise a sine wave at the requested frequency.
     const uint32_t sample_rate   = 16000;
     const uint32_t total_samples = (sample_rate * duration_ms) / 1000;
     const float    two_pi_f      = 2.0f * (float)M_PI * (float)frequency_hz;
@@ -274,12 +254,5 @@ void play_tone_pwm(const uint pwm_gpio, const uint32_t frequency_hz, const uint3
             tight_loop_contents();
     }
 
-    // Shut down PWM cleanly – same pattern as play_wav_pwm().
-    pwm_set_gpio_level(pwm_gpio, 2048);
-    pwm_set_enabled(slice_num, false);
-    gpio_set_function(pwm_gpio, GPIO_FUNC_SIO);
-    gpio_set_dir(pwm_gpio, GPIO_OUT);
-    gpio_put(pwm_gpio, 0);
-
-    printf("Tone complete\n");
+    shutdown_pwm_audio(pwm_gpio);
 }

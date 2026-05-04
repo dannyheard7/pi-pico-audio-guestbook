@@ -8,10 +8,6 @@
 
 using std::string;
 
-// ---------------------------------------------------------------------------
-// Analogue microphone recording via ADC + ping-pong DMA
-// ---------------------------------------------------------------------------
-
 // RP2040 ADC runs at 48 MHz; trigger period = (1 + clkdiv) ADC clock cycles.
 static const uint32_t ADC_CLOCK_HZ = 48000000;
 
@@ -116,53 +112,38 @@ void stop_recording()
     recording_active = false;
 }
 
-void record_wav_adc(const string output_path,
-                    const uint adc_gpio, uint32_t sample_rate)
+// Initialise ADC, DMA, IRQ and open the WAV file with a placeholder header.
+// Returns true on success and leaves the file open; on failure any claimed
+// DMA channels and IRQs are released and the function returns false.
+static bool init_recording(const string &output_path,
+                           const uint adc_gpio, uint32_t sample_rate,
+                           FIL *file, WAV_HEADER *header, uint32_t *data_size)
 {
-    printf("ADC recording: GPIO %u, %lu Hz -> %s\n",
-           adc_gpio, (unsigned long)sample_rate, output_path.c_str());
     rec_dc_midpoint_q8 = (2048 << 8);
 
-    // ------------------------------------------------------------------
-    // ADC setup
-    // adc_gpio must be one of GPIO 26 (ADC0), 27 (ADC1), or 28 (ADC2).
-    // ------------------------------------------------------------------
     adc_init();
     adc_set_temp_sensor_enabled(false);
     adc_gpio_init(adc_gpio);
     adc_select_input(adc_gpio - 26u);
 
-    // Enable the FIFO and wire it to DMA.  No error bit, no 8-bit shift
-    // (keep full 12-bit result right-aligned in a 16-bit word).
     adc_fifo_setup(true, true, 1, false, false);
     adc_fifo_drain();
 
-    // Clock divider: run the ADC at sample_rate * OVERSAMPLE so that we
-    // capture OVERSAMPLE raw readings per output sample.
-    // The clkdiv register sets the trigger interval in ADC clock cycles:
-    //   trigger period = (1 + clkdiv) ADC clock cycles
-    // The 96-cycle conversion time is already included in that period.
-    //   clkdiv = (ADC_CLOCK_HZ / (sample_rate * OVERSAMPLE)) - 1
     float clkdiv = (float)ADC_CLOCK_HZ /
                    ((float)sample_rate * (float)OVERSAMPLE) - 1.0f;
     if (clkdiv < 0.0f) clkdiv = 0.0f;
     adc_set_clkdiv(clkdiv);
 
-    // ------------------------------------------------------------------
-    // Ping-pong DMA setup (channels A and B chain to each other)
-    // ------------------------------------------------------------------
     rec_dma_chan_a = dma_claim_unused_channel(true);
     rec_dma_chan_b = dma_claim_unused_channel(true);
 
-    // Channel A: fills rec_buffer_a, then triggers channel B
     dma_channel_config cfg_a = dma_channel_get_default_config(rec_dma_chan_a);
     channel_config_set_transfer_data_size(&cfg_a, DMA_SIZE_16);
-    channel_config_set_read_increment(&cfg_a, false);  // ADC FIFO is a fixed address
+    channel_config_set_read_increment(&cfg_a, false);
     channel_config_set_write_increment(&cfg_a, true);
     channel_config_set_dreq(&cfg_a, DREQ_ADC);
     channel_config_set_chain_to(&cfg_a, rec_dma_chan_b);
 
-    // Channel B: fills rec_buffer_b, then triggers channel A
     dma_channel_config cfg_b = dma_channel_get_default_config(rec_dma_chan_b);
     channel_config_set_transfer_data_size(&cfg_b, DMA_SIZE_16);
     channel_config_set_read_increment(&cfg_b, false);
@@ -170,14 +151,11 @@ void record_wav_adc(const string output_path,
     channel_config_set_dreq(&cfg_b, DREQ_ADC);
     channel_config_set_chain_to(&cfg_b, rec_dma_chan_a);
 
-    // Enable DMA IRQ1 for both channels and register the handler
-    // (DMA_IRQ_0 is used exclusively by the SD card SPI driver)
     dma_channel_set_irq1_enabled(rec_dma_chan_a, true);
     dma_channel_set_irq1_enabled(rec_dma_chan_b, true);
     irq_add_shared_handler(DMA_IRQ_1, adc_dma_irq_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
     irq_set_enabled(DMA_IRQ_1, true);
 
-    // Pre-configure both channels (do not start yet)
     dma_channel_configure(rec_dma_chan_a, &cfg_a,
                           rec_buffer_a, &adc_hw->fifo,
                           RAW_BUFFER_SAMPLES, false);
@@ -185,11 +163,7 @@ void record_wav_adc(const string output_path,
                           rec_buffer_b, &adc_hw->fifo,
                           RAW_BUFFER_SAMPLES, false);
 
-    // ------------------------------------------------------------------
-    // Create output WAV file and write placeholder header
-    // ------------------------------------------------------------------
-    FIL file;
-    FRESULT fr = f_open(&file, output_path.c_str(), FA_WRITE | FA_CREATE_ALWAYS);
+    FRESULT fr = f_open(file, output_path.c_str(), FA_WRITE | FA_CREATE_ALWAYS);
     if (fr != FR_OK)
     {
         printf("ERROR: Could not create recording file: %s (%d)\n",
@@ -201,43 +175,78 @@ void record_wav_adc(const string output_path,
         dma_channel_unclaim(rec_dma_chan_a);
         dma_channel_unclaim(rec_dma_chan_b);
         rec_dma_chan_a = rec_dma_chan_b = -1;
-        return;
+        return false;
     }
 
     const uint16_t num_channels     = 1;
     const uint16_t bits_per_sample  = 16;
 
-    WAV_HEADER header;
-    memcpy(header.RIFF, "RIFF", 4);
-    header.ChunkSize     = 0; // filled in at the end
-    memcpy(header.WAVE, "WAVE", 4);
-    memcpy(header.fmt,  "fmt ", 4);
-    header.Subchunk1Size = 16;
-    header.AudioFormat   = 1;  // PCM
-    header.NumOfChannels = num_channels;
-    header.SamplesPerSec = sample_rate;
-    header.blockAlign    = num_channels * bits_per_sample / 8;
-    header.bytesPerSec   = sample_rate * header.blockAlign;
-    header.bitsPerSample = bits_per_sample;
+    memcpy(header->RIFF, "RIFF", 4);
+    header->ChunkSize     = 0;
+    memcpy(header->WAVE, "WAVE", 4);
+    memcpy(header->fmt,  "fmt ", 4);
+    header->Subchunk1Size = 16;
+    header->AudioFormat   = 1;
+    header->NumOfChannels = num_channels;
+    header->SamplesPerSec = sample_rate;
+    header->blockAlign    = num_channels * bits_per_sample / 8;
+    header->bytesPerSec   = sample_rate * header->blockAlign;
+    header->bitsPerSample = bits_per_sample;
 
     UINT bw;
-    f_write(&file, &header, sizeof(WAV_HEADER), &bw);
-    // "data" sub-chunk ID + placeholder size
-    f_write(&file, "data", 4, &bw);
-    uint32_t data_size = 0;
-    f_write(&file, &data_size, sizeof(data_size), &bw);
+    f_write(file, header, sizeof(WAV_HEADER), &bw);
+    f_write(file, "data", 4, &bw);
+    *data_size = 0;
+    f_write(file, data_size, sizeof(*data_size), &bw);
 
-    // ------------------------------------------------------------------
-    // Start recording loop
-    // ------------------------------------------------------------------
     rec_buf_a_ready  = false;
     rec_buf_b_ready  = false;
     recording_active = true;
 
-    dma_channel_start(rec_dma_chan_a); // B will be chained automatically
+    dma_channel_start(rec_dma_chan_a);
     adc_run(true);
 
-    printf("Recording started. Call stop_recording() to stop.\n");
+    return true;
+}
+
+// Finalise the recording: stop ADC/DMA, release resources and patch WAV header,
+// then close the file.
+static void finalize_recording(FIL *file, WAV_HEADER *header, uint32_t data_size)
+{
+    adc_run(false);
+    adc_fifo_drain();
+    dma_channel_abort(rec_dma_chan_a);
+    dma_channel_abort(rec_dma_chan_b);
+
+    irq_set_enabled(DMA_IRQ_1, false);
+    irq_remove_handler(DMA_IRQ_1, adc_dma_irq_handler);
+    dma_channel_set_irq1_enabled(rec_dma_chan_a, false);
+    dma_channel_set_irq1_enabled(rec_dma_chan_b, false);
+    dma_channel_unclaim(rec_dma_chan_a);
+    dma_channel_unclaim(rec_dma_chan_b);
+    rec_dma_chan_a = rec_dma_chan_b = -1;
+
+    header->ChunkSize = 36 + data_size;
+    f_lseek(file, 0);
+    UINT bw;
+    f_write(file, header, sizeof(WAV_HEADER), &bw);
+
+    f_lseek(file, sizeof(WAV_HEADER) + 4);
+    f_write(file, &data_size, sizeof(data_size), &bw);
+
+    f_close(file);
+}
+
+void record_wav_adc(const string output_path,
+                    const uint adc_gpio, uint32_t sample_rate)
+{
+
+    FIL file;
+    WAV_HEADER header;
+    uint32_t data_size = 0;
+
+    if (!init_recording(output_path, adc_gpio, sample_rate, &file, &header, &data_size))
+        return;
 
     // Discard the first two buffers so the DC tracking filter can settle
     // before any audio is written to file.  This avoids a loud thump at the
@@ -269,37 +278,5 @@ void record_wav_adc(const string output_path,
         __wfi();
     }
 
-    // ------------------------------------------------------------------
-    // Stop ADC and DMA, release resources
-    // ------------------------------------------------------------------
-    adc_run(false);
-    adc_fifo_drain();
-    dma_channel_abort(rec_dma_chan_a);
-    dma_channel_abort(rec_dma_chan_b);
-
-    irq_set_enabled(DMA_IRQ_1, false);
-    irq_remove_handler(DMA_IRQ_1, adc_dma_irq_handler);
-    dma_channel_set_irq1_enabled(rec_dma_chan_a, false);
-    dma_channel_set_irq1_enabled(rec_dma_chan_b, false);
-    dma_channel_unclaim(rec_dma_chan_a);
-    dma_channel_unclaim(rec_dma_chan_b);
-    rec_dma_chan_a = rec_dma_chan_b = -1;
-
-    // ------------------------------------------------------------------
-    // Patch the WAV header with the final sizes and close the file
-    // ------------------------------------------------------------------
-    // ChunkSize = 4 ("WAVE") + 8 (fmt chunk header) + 16 (fmt data)
-    //           + 8 ("data" chunk header) + data_size
-    //           = 36 + data_size
-    header.ChunkSize = 36 + data_size;
-    f_lseek(&file, 0);
-    f_write(&file, &header, sizeof(WAV_HEADER), &bw);
-
-    // Patch the data sub-chunk size field (4 bytes after the "data" tag)
-    f_lseek(&file, sizeof(WAV_HEADER) + 4);
-    f_write(&file, &data_size, sizeof(data_size), &bw);
-
-    f_close(&file);
-
-    printf("Recording saved: %lu bytes of audio data\n", (unsigned long)data_size);
+    finalize_recording(&file, &header, data_size);
 }

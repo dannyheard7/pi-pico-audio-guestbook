@@ -59,7 +59,7 @@ connected directly for monitoring but will be very quiet.
 
 ---
 
-## 3 – Analogue microphone input (GPIO 26, ADC0)
+## 3 – Analogue microphone input (GPIO 26, ADC0) (with anti-aliasing / noise filter)
 
 `record_wav_adc()` reads from **GPIO 26 (ADC0, pin 31)** by default.
 
@@ -67,19 +67,8 @@ The build is designed around the **MAX4466 electret microphone amplifier**
 module.  It already includes the electret capsule, biasing, and gain stage, and
 provides an analogue output centred near half the supply voltage for direct ADC use.
 
-### 3a – Basic connection (no filter)
-
-```
-Pico 3V3  (pin 36) ──── MAX4466 VCC
-Pico GND  (pin 38) ──── MAX4466 GND
-MAX4466 OUT         ──── GPIO 26 / ADC0  (pin 31)
-```
-
-### 3b – Recommended connection (with anti-aliasing / noise filter)
-
 Adding a simple first-order RC low-pass filter between the MAX4466 output and
-GPIO 26 is **strongly recommended**.  It provides two benefits that the firmware
-alone cannot:
+GPIO 26 provides two benefits
 
 1. **Anti-aliasing** – any signal above the Nyquist frequency (8 kHz at a 16 kHz
    sample rate) is attenuated *before* it reaches the ADC.  Once noise aliases
@@ -154,19 +143,3 @@ both edges:
 ```
 
 ---
-
-## Software usage
-
-```cpp
-#include "audio.h"
-
-// Record for 5 seconds from GPIO 26 (ADC0) at 16 000 Hz, save to SD card.
-add_alarm_in_ms(5000, [](alarm_id_t, void*) -> int64_t {
-    stop_recording(); return 0;
-}, nullptr, true);
-record_wav_adc("0:/recordings/guestbook.wav", 26, 16000);
-
-// Play back the recording through GPIO 18 (PWM).
-WavFile wav = /* load from SD */;
-play_wav_pwm(wav, 18);
-```

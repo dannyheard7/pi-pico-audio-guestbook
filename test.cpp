@@ -28,7 +28,7 @@ static const uint32_t RECORD_SAMPLE_RATE = 16000;
 // Milliseconds to wait after the handset is lifted before playing the greeting
 static const uint32_t PICKUP_DELAY_MS = 1000;
 // Volume of the ready tone: 0.0 (silent) to 1.0 (full scale)
-static const float TONE_VOLUME = 0.5f;
+static const float TONE_VOLUME = 0.2f;
 // Directory on the SD card that stores incoming recordings
 static const char *RECORDINGS_DIR = "0:/recordings";
 // Directory on the SD card that contains the greeting prompt(s)
@@ -78,7 +78,6 @@ static string next_recording_path()
 int main()
 {
     stdio_init_all();
-    printf("Pi Pico Audio Guestbook starting\n");
 
     // ------------------------------------------------------------------
     // Phone hook GPIO – internal pull-up, active-low.
@@ -97,9 +96,6 @@ int main()
     // edge that occurred during initialisation is not missed.
     phone_off_hook = !gpio_get(PHONE_HOOK_GPIO);
 
-    // ------------------------------------------------------------------
-    // SD card
-    // ------------------------------------------------------------------
     sd_card_t *pSD = sd_get_by_num(0);
     FRESULT fr = f_mount(&pSD->fatfs, pSD->pcName, 1);
     if (fr != FR_OK)
@@ -110,8 +106,6 @@ int main()
 
     // Create the recordings directory if it does not exist yet.
     f_mkdir(RECORDINGS_DIR);
-
-    printf("Guestbook ready – waiting for phone pick-up\n");
 
     // ------------------------------------------------------------------
     // Main guestbook loop – runs continuously until power is removed.
@@ -127,8 +121,6 @@ int main()
             __wfi();
         }
 
-        printf("Phone off hook – playing greeting\n");
-
         // Brief pause so the caller has a moment to bring the handset to
         // their ear before the greeting begins.
         sleep_ms(PICKUP_DELAY_MS);
@@ -136,55 +128,36 @@ int main()
         // Play the first available greeting prompt from the SD card.
         vector<unique_ptr<File>> prompts = list_files_in_folder(
             pSD, PROMPTS_DIR, std::make_unique<FileType>(FileType::Wav));
+
         if (!prompts.empty())
         {
             WavFile *wav = static_cast<WavFile *>(prompts[0].get());
             play_wav_pwm(*wav, AUDIO_OUT_GPIO);
-        }
-        else
-        {
-            printf("No prompt found in '%s' – skipping to record\n", PROMPTS_DIR);
         }
 
         // Only start recording if the handset is still off the hook after
         // the prompt has finished playing.
         if (!phone_off_hook)
         {
-            printf("Phone replaced before recording started\n");
             continue;
         }
 
         // Play a short beep so the caller knows the guestbook is ready to
         // record their message.
-        printf("Playing ready tone\n");
         play_tone_pwm(AUDIO_OUT_GPIO, 1000, 600, TONE_VOLUME);
 
         // Only start recording if the handset is still off the hook after
         // the tone has finished.
         if (!phone_off_hook)
         {
-            printf("Phone replaced before recording started\n");
             continue;
         }
 
         // Record until the handset is replaced.
-        // phone_hook_irq() calls stop_recording() on the rising edge,
-        // which causes record_wav_adc() to finalise the file and return.
         string path = next_recording_path();
-        printf("Recording to: %s\n", path.c_str());
         record_wav_adc(path, MIC_ADC_GPIO, RECORD_SAMPLE_RATE);
-        printf("Recording saved: %s\n", path.c_str());
-
-        // Wait for the handset to be fully replaced before listening for
-        // the next pick-up event.  __wfi() keeps the CPU in a low-power
-        // sleep state until the hook-switch GPIO IRQ fires.
-        while (phone_off_hook)
-        {
-            __wfi();
-        }
     }
 
-    // Unreachable, but included for completeness.
     f_unmount(pSD->pcName);
     return 0;
 }
