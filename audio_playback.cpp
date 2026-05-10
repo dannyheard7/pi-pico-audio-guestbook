@@ -20,7 +20,8 @@ static FIL *g_playback_fil = nullptr;
 
 // Set to false to ask play_wav_pwm() to stop early.
 static volatile bool playback_active = false;
-void stop_playback()
+
+void interrupt_playback()
 {
     playback_active = false;
 }
@@ -127,7 +128,6 @@ void play_wav_pwm(const WavFile &wav, const uint pwm_gpio)
     uint32_t  buf_offset          = 0;
 
     playback_active = true;
-
     for (uint32_t frame = 0; playback_active && frame < total_frames; frame++)
     {
         // If the active buffer is exhausted, swap in the pending one
@@ -242,7 +242,6 @@ void play_tone_pwm(const uint pwm_gpio, const uint32_t frequency_hz, const uint3
     uint64_t start_time = time_us_64();
 
     playback_active = true;
-
     for (uint32_t i = 0; i < total_samples && playback_active; i++)
     {
         float    t         = (float)i / (float)sample_rate;

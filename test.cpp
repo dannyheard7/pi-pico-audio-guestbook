@@ -34,8 +34,10 @@ static const char *RECORDINGS_DIR = "0:/recordings";
 // Directory on the SD card that contains the greeting prompt(s)
 static const char *PROMPTS_DIR = "0:/prompts";
 
-// True while the handset is off the hook (phone in use).
-static volatile bool phone_off_hook = false;
+static inline bool is_on_hook()
+{
+    return gpio_get(PHONE_HOOK_GPIO);
+}
 
 // Interrupt handler for the phone hook GPIO.
 // Fires on both edges so we can track the current hook state at all times,
@@ -45,20 +47,11 @@ static void phone_hook_irq(uint gpio, uint32_t events)
     if (gpio != PHONE_HOOK_GPIO)
         return;
 
-    if (events & GPIO_IRQ_EDGE_RISE)
+    if (is_on_hook())
     {
-        // Circuit opens → handset replaced (on hook)
-        phone_off_hook = false;
-        stop_playback();  // abort any in-progress greeting
-        stop_recording(); // safe to call from an interrupt handler
-    }
-    else if (events & GPIO_IRQ_EDGE_FALL)
-    {
-        // Circuit closes → handset lifted (off hook).
-        // Use else-if so that when both edges are latched together in a single
-        // IRQ call (a common RP2040 switch-bounce artifact) the RISE (on-hook)
-        // state takes priority and stop_playback() is not undone.
-        phone_off_hook = true;
+        // Transitioned to on hook – abort any in-progress playback/recording.
+        interrupt_playback();
+        interrupt_recording();
     }
 }
 
@@ -95,10 +88,6 @@ int main()
         true,
         &phone_hook_irq);
 
-    // Read the current hook state *after* enabling the interrupt so that any
-    // edge that occurred during initialisation is not missed.
-    phone_off_hook = !gpio_get(PHONE_HOOK_GPIO);
-
     sd_card_t *pSD = sd_get_by_num(0);
     FRESULT fr = f_mount(&pSD->fatfs, pSD->pcName, 1);
     if (fr != FR_OK)
@@ -119,14 +108,19 @@ int main()
         // __wfi() puts the CPU into a low-power sleep until the next interrupt
         // fires (i.e. the GPIO IRQ from the hook switch), consuming far less
         // energy than polling with sleep_ms().
-        while (!phone_off_hook)
+        while (is_on_hook())
         {
             __wfi();
         }
 
         // Brief pause so the caller has a moment to bring the handset to
         // their ear before the greeting begins.
-        sleep_ms(PICKUP_DELAY_MS);
+        sleep_ms(PICKUP_DELAY_MS);      
+        
+        if (is_on_hook())
+        {
+            continue;
+        }
 
         // Play the first available greeting prompt from the SD card.
         vector<unique_ptr<File>> prompts = list_files_in_folder(
@@ -140,7 +134,7 @@ int main()
 
         // Only start recording if the handset is still off the hook after
         // the prompt has finished playing.
-        if (!phone_off_hook)
+        if (is_on_hook())
         {
             continue;
         }
@@ -151,7 +145,7 @@ int main()
 
         // Only start recording if the handset is still off the hook after
         // the tone has finished.
-        if (!phone_off_hook)
+        if (is_on_hook())
         {
             continue;
         }
@@ -164,3 +158,4 @@ int main()
     f_unmount(pSD->pcName);
     return 0;
 }
+
